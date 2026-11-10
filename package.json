@@ -1,0 +1,17 @@
+{
+  "name": "kumodesk",
+  "version": "1.6.0",
+  "description": "Panel decyzyjny Ichimoku D1: sila walut, rezim rynku, ranking setupow, alerty e-mail. Nie sklada zlecen.",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test"
+  },
+  "engines": { "node": ">=22.13" },
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.2",
+    "nodemailer": "^6.9.16"
+  }
+}
