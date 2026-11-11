@@ -14,7 +14,10 @@ function transport(smtp) {
     secure: sec === 'tls',
     requireTLS: sec === 'starttls',
     ignoreTLS: sec === 'none',
-    auth: smtp.user ? { user: smtp.user, pass: smtp.pass } : undefined,
+    // Google: OAuth2 (XOAUTH2) z tokenem odświeżania albo zwykłe hasło / hasło aplikacji
+    auth: smtp.auth === 'oauth2' && smtp.oauthRefreshToken
+      ? { type: 'OAuth2', user: smtp.user, clientId: smtp.oauthClientId, clientSecret: smtp.oauthClientSecret, refreshToken: smtp.oauthRefreshToken }
+      : smtp.user ? { user: smtp.user, pass: smtp.pass } : undefined,
     connectionTimeout: 15000, greetingTimeout: 15000, socketTimeout: 20000,
   });
 }

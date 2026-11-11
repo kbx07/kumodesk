@@ -219,6 +219,10 @@ export const DEFAULT_SETTINGS = {
     fallbackProvider: '',       // opcjonalne źródło zapasowe
     twelvedataKey: '',
     stooqKey: '',
+    finnhubKey: '',
+    eodhdKey: '',
+    liveProvider: '',           // źródło bieżących cen dla otwartych pozycji (puste = takie jak dane)
+    liveSeconds: 20,            // co ile sekund odświeżać ceny otwartych pozycji
     historyYears: 3,
   },
   ichimoku: { tenkan: 9, kijun: 26, senkou: 52, shift: 26, atr: 14 },
@@ -239,5 +243,7 @@ export const DEFAULT_SETTINGS = {
     positions: 'changes',       // e-maile o otwartych pozycjach (H4): off | changes | always
     lang: '',                   // język e-maili: pl | de | en (puste = ustawi przeglądarka przy pierwszym uruchomieniu)              // alerty dla setupów od tej klasy
   },
-  smtp: { host: '', port: 587, security: 'starttls', user: '', pass: '', from: '', to: '' },
+  smtp: { host: '', port: 587, security: 'starttls', user: '', pass: '', from: '', to: '',
+    auth: 'password',           // password | oauth2 (Google)
+    oauthClientId: '', oauthClientSecret: '', oauthRefreshToken: '' },
 };

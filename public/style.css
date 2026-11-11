@@ -524,3 +524,6 @@ dialog.lightbox img { display: block; max-width: 90vw; max-height: 78vh; border-
 
 .splitbar { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; }
 .splitbar i { display: block; height: 100%; }
+
+.live { font-size: 12.5px; display: inline-flex; align-items: center; gap: 2px; }
+.liveres { font-weight: 600; margin-left: 6px; }

@@ -29,10 +29,10 @@ Run on the Proxmox **host** shell (creates a Debian LXC and installs everything)
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/kbx07/kumodesk/main/ct/kumodesk.sh)"
 ```
 
-Defaults: 1 core, 512 MB RAM, 4 GB disk, DHCP on `vmbr0`, unprivileged container. Override with environment variables:
+The installer asks whether to use **default settings** (1 core, 512 MB RAM, 4 GB disk, DHCP on `vmbr0`, unprivileged) or **advanced settings** (ID, hostname, resources, network, storage, container type), and for an optional root password. Without a root password, open a shell with `pct exec <CTID> -- bash`. Everything can also be preset with environment variables; `ASSUME_YES=1` skips the questions:
 
 ```bash
-CTID=120 CT_RAM=1024 CT_STORAGE=local-zfs CT_IP=192.168.1.50/24 CT_GW=192.168.1.1 \
+ASSUME_YES=1 CTID=120 CT_RAM=1024 CT_STORAGE=local-zfs CT_IP=192.168.1.50/24 CT_GW=192.168.1.1 \
   bash -c "$(curl -fsSL https://raw.githubusercontent.com/kbx07/kumodesk/main/ct/kumodesk.sh)"
 ```
 
@@ -193,6 +193,8 @@ A trade's money result is calculated as capital before the trade × risk % × re
 | Yahoo Finance (default) | none | Unofficial API; may change without notice and is rate limited. Requests are spaced out and retried politely. Metals use front-month futures (`GC=F`, `SI=F`…). Two known defects are corrected automatically: daily FX candles whose close equals the open (the close is taken from the next day's open), and instruments without daily history such as WIG20 (daily candles are built from hourly data, up to two years back). |
 | Twelve Data | free key | 800 requests/day, 8/minute. Some indices and metals need a paid plan. |
 | Stooq | optional | Free CSV downloads; sometimes unavailable to automated clients. |
+| EODHD | paid key | Daily candles and live quotes for stocks, currencies, indices and crypto. Symbols in EODHD notation (`EURUSD.FOREX`, `AAPL.US`). Written from the documentation, not tested with a key. |
+| Finnhub | free or paid key | Live quotes only, usable as the live price source. Written from the documentation, not tested with a key. |
 
 Choose the default and an optional fallback in **Settings → Market data**; each instrument can override the source and has its own symbol per source.
 
@@ -201,11 +203,43 @@ Note for FX on Yahoo: its daily candle rolls at midnight London time, so at 17:1
 ## Notifications
 
 **Settings → Notifications**: SMTP host, port, encryption (STARTTLS / SSL / none), credentials, sender, recipients, and a test button.
+
+**Gmail** does not accept the normal account password. Two ways work:
+
+1. *App password* — press "Set up for Gmail", enter your Gmail address as the username and a 16-character app password (Google account → Security → 2-Step Verification → App passwords).
+2. *Sign in with Google (OAuth2)* — create an OAuth client of type "web application" in Google Cloud, add the redirect URI shown in the settings (`https://<your-domain>/api/auth/google/callback`), paste the client ID and secret, then press "Sign in with Google". This needs the app to be reachable under a public HTTPS domain. It was implemented from Google's documentation and not exercised against a real Google account.
+
 Modes: off, alerts only, or a report after every group analysis. Alerts cover new or upgraded setups, lost setups, regime and execution-mode changes, signals turning against your logged positions, and changed H4 advice for open positions.
 
 ### In-app notifications
 
 The bell in the top right corner shows the same events that are e-mailed — analysis ready for a market group, new or lost setups, regime and mode changes, changed advice for open positions — with an unread counter. It works without SMTP.
+
+## Two-factor authentication
+
+New accounts must set up a code from an authenticator app (TOTP, e.g. Google Authenticator) right after their first sign-in: scan the QR code, confirm with a code, store the ten recovery codes. Accounts that existed before get a one-time reminder and can turn it on in Settings → General. "Remember this device" skips the code on that browser for 90 days. An administrator can reset a user's second factor in Settings → Users; from the command line add `--reset-2fa` to the password reset command below.
+
+## Logs
+
+Settings → Logs lists events with a type filter: sign-ins, positions, system runs, data errors, notifications and settings changes. Users see their own entries; administrators see everything and can filter by user and export CSV.
+
+## Signal tracking and algorithm accuracy
+
+Every TRADE decision is tracked as if entered at the close of its candle with the plan's stop, until the stop is hit (−1R) or the direction fades or reverses. The instrument table shows the "green light" date and the result since then; the Portfolio page shows how often the algorithm was right, by grade, with the latest finished signals. On first start the last year is replayed in the background (about a minute). Treat the numbers as a sanity check of the rules, not as a promise: they ignore spreads and commissions.
+
+## Themes and appearance
+
+Administrators pick a theme in Settings → General: **Normal** (with a choice of sign-in and app backgrounds), **Anime**, **Cosplay**, or **Custom** with your own uploaded images (left, right, background; PNG, JPEG, WebP or GIF up to 5 MB).
+
+## Group chat, attachments and push notifications
+
+- **Groups** — administrators create chat groups and choose their members (Messages → New group).
+- **Attachments** — any file up to 5 MB; images open in a preview window, other files download. Only participants of the conversation can open a file.
+- **Push notifications** — off by default; each user turns them on per device in Settings → General and the browser asks for permission. They carry the same events as the bell plus new messages. Push needs the app to be opened over **HTTPS** (browsers refuse it on plain HTTP); the app can also be installed from the browser as a standalone window.
+
+## Live prices for open positions
+
+Open positions show the current price and running result, refreshed every 20 seconds by default (Settings → Market data). The source can be the normal data source or a separate live source. Trade selection always stays on closed daily candles.
 
 ## Accounts, sharing and messages
 

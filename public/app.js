@@ -95,7 +95,7 @@ function positionsCard(positions, compact) {
     h('span', { class: 'muted small' }, status?.h4?.next ? T('h4.next', { ts: fmtTs(status.h4.next) }) : '')));
   card.append(h('div', { class: 'poslist' }, positions.map((p) => h('a', { class: 'pos', href: `#/i/${p.instrument_id}?tf=h4` },
     h('div', { class: 'pos-head' }, h('b', null, p.instrument_id), dirBadge(p.direction), adviceBadge(p.advice),
-      h('span', { class: 'muted small num' }, adviceResult(p.advice)), p.advice?.h4Score != null ? h('span', { class: 'muted small' }, 'H4 ', miniBar(p.advice.h4Score)) : null),
+      h('span', { class: 'live num', 'data-live': p.instrument_id, 'data-dir': p.direction, 'data-entry': p.entry ?? '', 'data-stop': p.stop_initial ?? p.stop ?? '' }, h('span', { class: 'muted small' }, adviceResult(p.advice))), p.advice?.h4Score != null ? h('span', { class: 'muted small' }, 'H4 ', miniBar(p.advice.h4Score)) : null),
     h('div', { class: 'pos-text' }, adviceText(p.advice))))));
   if (!compact) card.append(h('p', { class: 'hint' }, T('h4.hint')));
   return card;
@@ -741,7 +741,7 @@ async function viewSettings() {
   const field = (label, input, hint) => h('label', null, label, input, hint ? h('span', { class: 'muted' }, hint) : null);
   const num = (name, value, attrs = {}) => h('input', { type: 'number', name, value, step: 'any', ...attrs });
   const formData = (f) => Object.fromEntries(new FormData(f));
-  const provOptions = (sel, allowEmpty, emptyLabel) => [allowEmpty ? h('option', { value: '', selected: !sel }, emptyLabel) : null, ...providers.map((p) => h('option', { value: p.id, selected: p.id === sel }, p.name))];
+  const provOptions = (sel, allowEmpty, emptyLabel, kind = 'daily') => [allowEmpty ? h('option', { value: '', selected: !sel }, emptyLabel) : null, ...providers.filter((p) => p[kind]).map((p) => h('option', { value: p.id, selected: p.id === sel }, p.name))];
   const tzList = h('datalist', { id: 'tzlist' }, (Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : []).map((z) => h('option', { value: z })));
 
   const panes = {
@@ -853,9 +853,13 @@ async function viewSettings() {
         field(T('set.fallback'), h('select', { name: 'fallbackProvider' }, provOptions(s.data.fallbackProvider, true, T('set.none')))),
         field(T('set.tdKey'), h('input', { type: 'text', name: 'twelvedataKey', value: s.data.twelvedataKey, autocomplete: 'off' })),
         field(T('set.stooqKey'), h('input', { type: 'text', name: 'stooqKey', value: s.data.stooqKey, autocomplete: 'off' })),
+        field(T('set.eodhdKey'), h('input', { type: 'text', name: 'eodhdKey', value: s.data.eodhdKey, autocomplete: 'off' })),
+        field(T('set.finnhubKey'), h('input', { type: 'text', name: 'finnhubKey', value: s.data.finnhubKey, autocomplete: 'off' })),
+        field(T('set.liveProvider'), h('select', { name: 'liveProvider' }, provOptions(s.data.liveProvider, true, T('set.liveProvider.same'), 'live')), T('set.liveProvider.hint')),
+        field(T('set.liveSeconds'), num('liveSeconds', s.data.liveSeconds, { min: 5, max: 600, step: 1 })),
         field(T('set.years'), num('historyYears', s.data.historyYears, { min: 2, max: 10, step: 1 }), T('set.years.hint')),
         h('div', null, h('button', { class: 'btn primary' }, T('save'))));
-      f.onsubmit = async (e) => { e.preventDefault(); const d = formData(f); d.historyYears = Number(d.historyYears); if (await save({ data: d })) render(); };
+      f.onsubmit = async (e) => { e.preventDefault(); const d = formData(f); d.historyYears = Number(d.historyYears); d.liveSeconds = Number(d.liveSeconds); if (await save({ data: d })) render(); };
       const tf = h('form', { class: 'form' },
         field(T('set.provider'), h('select', { name: 'provider' }, provOptions(s.data.provider))),
         field(T('set.symbol'), h('input', { type: 'text', name: 'symbol', value: 'EURUSD=X', required: true })),
@@ -948,11 +952,20 @@ async function viewSettings() {
         field(T('ntf.mode'), h('select', { name: 'mode' }, ['off', 'alerts', 'report'].map((m) => h('option', { value: m, selected: m === s.notify.mode }, T('ntf.mode.' + m))))),
         field(T('ntf.positions'), h('select', { name: 'positions' }, ['off', 'changes', 'always'].map((m) => h('option', { value: m, selected: m === s.notify.positions }, T('ntf.positions.' + m))))),
         field(T('ntf.minGrade'), h('select', { name: 'minGrade' }, ['A', 'B', 'C'].map((g) => h('option', { value: g, selected: g === s.notify.minGrade }, g)))),
+        h('div', { class: 'wide sharerow' }, h('button', { type: 'button', class: 'btn', onclick: () => { f.elements.host.value = 'smtp.gmail.com'; f.elements.port.value = 587; f.elements.security.value = 'starttls'; toast(T('smtp.gmail.filled')); } }, T('smtp.gmail')), h('span', { class: 'muted small' }, T('smtp.gmail.hint'))),
         field(T('smtp.host'), h('input', { type: 'text', name: 'host', value: s.smtp.host, placeholder: 'smtp.example.com' })),
         field(T('smtp.port'), num('port', s.smtp.port, { min: 1, max: 65535, step: 1 })),
         field(T('smtp.security'), h('select', { name: 'security' }, ['starttls', 'tls', 'none'].map((m) => h('option', { value: m, selected: m === s.smtp.security }, T('smtp.security.' + m))))),
         field(T('smtp.user'), h('input', { type: 'text', name: 'user', value: s.smtp.user, autocomplete: 'off' })),
-        field(T('smtp.pass'), h('input', { type: 'password', name: 'pass', placeholder: s.smtp.passSet ? T('smtp.pass.keep') : '', autocomplete: 'new-password' })),
+        field(T('smtp.pass'), h('input', { type: 'password', name: 'pass', placeholder: s.smtp.passSet ? T('smtp.pass.keep') : '', autocomplete: 'new-password' }), T('smtp.pass.hint')),
+        field(T('smtp.auth'), h('select', { name: 'auth' }, ['password', 'oauth2'].map((m) => h('option', { value: m, selected: m === s.smtp.auth }, T('smtp.auth.' + m))))),
+        field(T('smtp.oauthClientId'), h('input', { type: 'text', name: 'oauthClientId', value: s.smtp.oauthClientId, autocomplete: 'off' })),
+        field(T('smtp.oauthClientSecret'), h('input', { type: 'password', name: 'oauthClientSecret', placeholder: s.smtp.oauthSecretSet ? T('smtp.pass.keep') : '', autocomplete: 'new-password' })),
+        h('div', { class: 'wide sharerow' },
+          h('span', { class: 'badge' }, h('span', { class: `dot ${s.smtp.oauthConnected ? 'good' : ''}` }), T(s.smtp.oauthConnected ? 'smtp.google.connected' : 'smtp.google.notConnected')),
+          h('button', { type: 'button', class: 'btn', onclick: async () => { if (!(await submit())) return; try { const r = await api('/google/start'); location.href = r.url; } catch (e) { toast(TE(e.message), true); } } }, T('smtp.google.connect')),
+          s.smtp.oauthConnected ? h('button', { type: 'button', class: 'btn danger', onclick: async () => { await api('/google/disconnect', { method: 'POST' }); render(); } }, T('smtp.google.disconnect')) : null,
+          h('span', { class: 'muted small' }, T('smtp.google.hint', { url: `${location.origin}/api/auth/google/callback` }))),
         field(T('smtp.from'), h('input', { type: 'text', name: 'from', value: s.smtp.from, placeholder: 'KumoDesk <kumodesk@example.com>' })),
         h('label', { class: 'wide' }, T('smtp.to'), h('input', { type: 'text', name: 'to', value: s.smtp.to, placeholder: 'me@example.com, other@example.com' })),
         h('div', { class: 'wide actions' }, h('button', { class: 'btn primary' }, T('save')),
@@ -1390,6 +1403,27 @@ async function toggleBell(force) {
   } catch (e) { panel.replaceChildren(h('div', { class: 'err', style: 'padding:14px' }, TE(e.message))); }
 }
 
+// ---------- ceny na żywo dla otwartych pozycji ----------
+let liveTimer = null;
+async function refreshLive() {
+  clearTimeout(liveTimer);
+  const els = document.querySelectorAll('[data-live]');
+  if (!me || !els.length || document.hidden) { liveTimer = setTimeout(refreshLive, 15000); return; }
+  let every = 20;
+  try {
+    const d = await api('/positions/live'); every = d.every;
+    els.forEach((el) => {
+      const q = d.quotes[el.dataset.live]; if (!q) return;
+      const sign = el.dataset.dir === 'LONG' ? 1 : -1, entry = Number(el.dataset.entry), stop = Number(el.dataset.stop);
+      const hasE = el.dataset.entry !== '', hasS = el.dataset.stop !== '' && stop !== entry;
+      const r = hasE && hasS ? sign * (q.price - entry) / Math.abs(entry - stop) : null, pct = hasE ? sign * (q.price - entry) / entry * 100 : null;
+      el.replaceChildren(h('span', { class: `dot ${q.live ? 'good' : ''}`, style: 'display:inline-block;margin-right:5px', title: q.live ? T('live.on', { ts: fmtTs(q.time) }) : T('live.off') }), fmtPrice(q.price),
+        r != null || pct != null ? h('b', { class: 'liveres', style: `color:var(--${(r ?? pct) >= 0 ? 'good' : 'neg'})` }, r != null ? ` ${signed(r, 2)} R` : '', pct != null ? ` ${signed(pct, 2)}%` : '') : null);
+    });
+  } catch { /* spróbujemy przy następnym takcie */ }
+  liveTimer = setTimeout(refreshLive, every * 1000);
+}
+
 // ---------- routing / pętla ----------
 const NAV = [['#/', 'nav.dashboard'], ['#/portfolio', 'nav.portfolio'], ['#/history', 'nav.history'], ['#/settings', 'nav.settings'], ['#/help', 'nav.help']];
 let renderSeq = 0;
@@ -1409,11 +1443,11 @@ async function render() {
     else if (route.startsWith('#/portfolio')) { const u = Number(new URLSearchParams(route.split('?')[1] || '').get('u')); node = u && u !== me.id ? await viewSharedPortfolio(u) : await viewPortfolio(); }
     else if (route.startsWith('#/messages')) { const qp = new URLSearchParams(route.split('?')[1] || ''); node = await viewMessages({ u: Number(qp.get('u')) || null, r: Number(qp.get('r')) || null }); }
     else if (route === '#/history') node = await viewHistory();
-    else if (route === '#/settings') node = await viewSettings();
+    else if (route.startsWith('#/settings')) { const g = new URLSearchParams(route.split('?')[1] || '').get('google'); if (g) { settingsTab = 'notify'; history.replaceState(null, '', '#/settings'); setTimeout(() => toast(g === 'ok' ? T('smtp.google.ok') : T('smtp.google.fail') + ' ' + g, g !== 'ok'), 100); } node = await viewSettings(); }
     else if (route === '#/help') node = viewHelp();
     else node = uiMode === 'basic' ? viewBasic() : viewDashboard();
   } catch (e) { node = h('div', { class: 'card err' }, TE(e.message)); }
-  if (seq === renderSeq) $('#view').replaceChildren(node);
+  if (seq === renderSeq) { $('#view').replaceChildren(node); refreshLive(); }
 }
 
 function updateJobInfo() {

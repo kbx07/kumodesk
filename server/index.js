@@ -1,6 +1,7 @@
 // KumoDesk – serwer HTTP (API + pliki statyczne).
 import express from 'express';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as db from './db.js';
@@ -23,7 +24,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3003;
 const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
-const VERSION = '2.4.0';
+const VERSION = '2.5.0';
 
 db.openDb(path.join(DATA_DIR, 'kumodesk.db'));
 
@@ -59,8 +60,8 @@ function sniffImage(buf) {
 /** Ustawienia widoczne dla użytkownika: osobiste zawsze, dane serwera (SMTP, klucze) tylko dla administratora. */
 function publicSettings(user) {
   const s = db.getSettings(user.id);
-  if (user.role === 'admin') return { ...s, smtp: { ...s.smtp, pass: '', passSet: !!s.smtp.pass } };
-  return { ...s, smtp: { host: '', port: 587, security: 'starttls', user: '', pass: '', from: '', to: '', passSet: false }, data: { ...s.data, twelvedataKey: '', stooqKey: '' } };
+  if (user.role === 'admin') return { ...s, smtp: { ...s.smtp, pass: '', passSet: !!s.smtp.pass, oauthClientSecret: '', oauthSecretSet: !!s.smtp.oauthClientSecret, oauthRefreshToken: '', oauthConnected: !!s.smtp.oauthRefreshToken } };
+  return { ...s, smtp: { host: '', port: 587, security: 'starttls', user: '', pass: '', from: '', to: '', passSet: false, auth: 'password', oauthClientId: '', oauthClientSecret: '', oauthRefreshToken: '' }, data: { ...s.data, twelvedataKey: '', stooqKey: '', finnhubKey: '', eodhdKey: '' } };
 }
 
 /** Wpis do dziennika zdarzeń. */
@@ -235,6 +236,60 @@ app.delete('/api/theme/:slot', admin, wrap((req, res) => {
   const all = db.getSettings(); all.appearance.custom = custom;
   db.replaceSetting('appearance', all.appearance);
   res.json({ appearance: appearance() });
+}));
+
+// ---------- Google: połączenie konta do wysyłki poczty (OAuth2) ----------
+// Wymaga własnego klienta OAuth w Google Cloud z adresem powrotnym https://<twoja-domena>/api/auth/google/callback.
+const googleRedirect = (req) => `${req.headers['x-forwarded-proto'] || req.protocol}://${req.headers['x-forwarded-host'] || req.headers.host}/api/auth/google/callback`;
+app.get('/api/google/start', admin, wrap((req, res) => {
+  const s = db.getSettings().smtp;
+  if (!s.oauthClientId || !s.oauthClientSecret) throw bad('err.googleClient');
+  const state = crypto.randomBytes(24).toString('hex');
+  db.setMeta('googleState', JSON.stringify({ state, user: req.user.id, exp: Date.now() + 10 * 60 * 1000 }));
+  const q = new URLSearchParams({ client_id: s.oauthClientId, redirect_uri: googleRedirect(req), response_type: 'code', scope: 'https://mail.google.com/', access_type: 'offline', prompt: 'consent', state });
+  res.json({ url: `https://accounts.google.com/o/oauth2/v2/auth?${q}`, redirect: googleRedirect(req) });
+}));
+app.get('/api/auth/google/callback', wrap(async (req, res) => {
+  const user = auth.currentUser(req);
+  let saved = {}; try { saved = JSON.parse(db.getMeta('googleState') || '{}'); } catch { /* brak */ }
+  const done = (msg) => res.redirect(`/#/settings?google=${encodeURIComponent(msg)}`);
+  if (!user || user.role !== 'admin' || !saved.state || saved.state !== req.query.state || saved.user !== user.id || saved.exp < Date.now()) return done('state');
+  db.setMeta('googleState', '');
+  if (!req.query.code) return done(String(req.query.error || 'denied'));
+  const s = db.getSettings().smtp;
+  try {
+    const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: AbortSignal.timeout(20000),
+      body: new URLSearchParams({ code: String(req.query.code), client_id: s.oauthClientId, client_secret: s.oauthClientSecret, redirect_uri: googleRedirect(req), grant_type: 'authorization_code' }) });
+    const j = await r.json();
+    if (!r.ok || !j.refresh_token) return done(j.error_description || j.error || 'no_refresh_token');
+    db.saveSettings({ smtp: { auth: 'oauth2', oauthRefreshToken: j.refresh_token, host: s.host || 'smtp.gmail.com', port: s.host ? s.port : 465, security: s.host ? s.security : 'tls' } });
+    db.addLog({ user_id: user.id, category: 'admin', code: 'admin.google', params: {} });
+    done('ok');
+  } catch (e) { done(e.message.slice(0, 80)); }
+}));
+app.post('/api/google/disconnect', admin, wrap((req, res) => {
+  const all = db.getSettings(); all.smtp.oauthRefreshToken = ''; all.smtp.auth = 'password';
+  db.replaceSetting('smtp', all.smtp);
+  res.json({ ok: true });
+}));
+
+// ---------- ceny na żywo dla otwartych pozycji ----------
+const liveCache = new Map(); // id -> { at, quote }
+app.get('/api/positions/live', wrap(async (req, res) => {
+  const s = db.getSettings();
+  const ttl = Math.max(5, s.data.liveSeconds || 20) * 1000;
+  const out = {};
+  for (const pos of db.listPositions(req.user.id)) {
+    const id = pos.instrument_id;
+    if (out[id]) continue;
+    const hit = liveCache.get(id);
+    if (hit && Date.now() - hit.at < ttl) { out[id] = hit.quote; continue; }
+    const inst = db.getInstrument(id);
+    if (!inst) continue;
+    try { const q = await quoteFor(inst); liveCache.set(id, { at: Date.now(), quote: q }); out[id] = q; }
+    catch { /* brak ceny – pozycja pokaże ostatnie zamknięcie */ }
+  }
+  res.json({ quotes: out, every: Math.round(ttl / 1000) });
 }));
 
 // ---------- skuteczność algorytmu ----------
@@ -503,7 +558,7 @@ app.get('/api/settings', wrap((req, res) => {
   res.json({
     settings: publicSettings(req.user),
     loginBgs: LOGIN_BGS, appBgs: APP_BGS, themes: THEMES,
-    providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, name: p.name, needsKey: p.needsKey })),
+    providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, name: p.name, needsKey: p.needsKey, daily: !!p.fetchDaily, live: !!p.fetchQuote })),
     classes: CLASSES,
   });
 }));
@@ -524,9 +579,15 @@ app.put('/api/settings', wrap((req, res) => {
   if (patch.risk) for (const k of ['maxTotal', 'maxCurrency', 'maxPosition']) if (patch.risk[k] != null) { const v = Number(patch.risk[k]); if (!(v > 0 && v <= 100)) throw bad('err.riskPct'); patch.risk[k] = v; }
   if (patch.smtp) {
     if (!patch.smtp.pass && !patch.smtp.clearPass) delete patch.smtp.pass;
-    delete patch.smtp.passSet; delete patch.smtp.clearPass;
+    if (!patch.smtp.oauthClientSecret) delete patch.smtp.oauthClientSecret;
+    if (patch.smtp.auth != null && !['password', 'oauth2'].includes(patch.smtp.auth)) throw bad('err.smtp');
+    // token odświeżania ustawia wyłącznie połączenie z Google albo jawne wklejenie
+    if (!patch.smtp.oauthRefreshToken) delete patch.smtp.oauthRefreshToken;
+    delete patch.smtp.passSet; delete patch.smtp.clearPass; delete patch.smtp.oauthSecretSet; delete patch.smtp.oauthConnected;
   }
-  if (patch.data?.provider && !PROVIDERS[patch.data.provider]) throw bad('err.provider');
+  if (patch.data?.provider && !PROVIDERS[patch.data.provider]?.fetchDaily) throw bad('err.provider');
+  if (patch.data?.liveProvider && !PROVIDERS[patch.data.liveProvider]?.fetchQuote) throw bad('err.provider');
+  if (patch.data?.liveSeconds != null) patch.data.liveSeconds = Math.max(5, Math.min(600, Math.round(Number(patch.data.liveSeconds)) || 20));
   if (patch.ichimoku) {
     for (const k of ['tenkan', 'kijun', 'senkou', 'shift', 'atr']) {
       if (patch.ichimoku[k] != null) {

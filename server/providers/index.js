@@ -180,7 +180,49 @@ const stooq = {
   },
 };
 
-export const PROVIDERS = { yahoo, twelvedata, stooq };
+// Finnhub: bieżące notowania (klucz darmowy lub płatny). Bez świec dziennych w darmowym planie,
+// dlatego służy wyłącznie jako źródło cen na żywo.
+const finnhub = {
+  id: 'finnhub',
+  name: 'Finnhub',
+  needsKey: true,
+  liveOnly: true,
+  async fetchQuote(symbol, { settings } = {}) {
+    const key = settings?.data?.finnhubKey;
+    if (!key) throw new Error('Finnhub API key missing');
+    await throttle('finnhub', 1100);
+    const json = JSON.parse(await http(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(key)}`, { accept: 'application/json' }));
+    if (!Number.isFinite(json.c) || json.c === 0) throw new Error(json.error || 'no quote');
+    return { price: json.c, time: json.t ? new Date(json.t * 1000).toISOString() : new Date().toISOString() };
+  },
+};
+
+// EODHD: płatne plany obejmują świece dzienne i notowania bieżące dla akcji, walut, indeksów i krypto.
+const eodhd = {
+  id: 'eodhd',
+  name: 'EODHD',
+  needsKey: true,
+  async fetchDaily(symbol, { years = 3, settings } = {}) {
+    const key = settings?.data?.eodhdKey;
+    if (!key) throw new Error('EODHD API key missing');
+    await throttle('eodhd', 300);
+    const from = new Date(Date.now() - years * 366 * 86400000).toISOString().slice(0, 10);
+    const json = JSON.parse(await http(`https://eodhd.com/api/eod/${encodeURIComponent(symbol)}?from=${from}&period=d&fmt=json&api_token=${encodeURIComponent(key)}`, { accept: 'application/json' }));
+    if (!Array.isArray(json)) throw new Error(typeof json === 'string' ? json.slice(0, 120) : 'EODHD error');
+    return json.map((v) => ({ date: v.date, o: +v.open, h: +v.high, l: +v.low, c: +v.close, v: v.volume != null ? +v.volume : null })).filter((b) => [b.o, b.h, b.l, b.c].every(Number.isFinite));
+  },
+  async fetchQuote(symbol, { settings } = {}) {
+    const key = settings?.data?.eodhdKey;
+    if (!key) throw new Error('EODHD API key missing');
+    await throttle('eodhd', 300);
+    const json = JSON.parse(await http(`https://eodhd.com/api/real-time/${encodeURIComponent(symbol)}?fmt=json&api_token=${encodeURIComponent(key)}`, { accept: 'application/json' }));
+    const price = Number(json.close);
+    if (!Number.isFinite(price)) throw new Error('no quote');
+    return { price, time: json.timestamp ? new Date(json.timestamp * 1000).toISOString() : new Date().toISOString() };
+  },
+};
+
+export const PROVIDERS = { yahoo, twelvedata, stooq, eodhd, finnhub };
 
 /**
  * Porządkuje świece: sortuje, usuwa duplikaty dat, a świece sobotnio-niedzielne
@@ -211,7 +253,7 @@ export function normalizeBars(bars) {
 /** Pobiera dane instrumentu: źródło instrumentu → domyślne → zapasowe. */
 export async function fetchInstrument(inst, settings) {
   const order = [inst.provider, settings.data.provider, settings.data.fallbackProvider]
-    .filter((p, i, a) => p && PROVIDERS[p] && a.indexOf(p) === i);
+    .filter((p, i, a) => p && PROVIDERS[p]?.fetchDaily && a.indexOf(p) === i);
   const errors = [];
   for (const pid of order) {
     const symbol = inst.symbols?.[pid];
@@ -246,7 +288,8 @@ export async function fetchInstrumentH4(inst, settings) {
 
 /** Bieżąca cena instrumentu ze źródła obsługującego notowania. */
 export async function fetchInstrumentQuote(inst, settings) {
-  const order = [inst.provider, settings.data.provider, settings.data.fallbackProvider, 'yahoo']
+  // najpierw wybrane źródło cen na żywo, potem źródła danych instrumentu
+  const order = [settings.data.liveProvider, inst.provider, settings.data.provider, settings.data.fallbackProvider, 'yahoo']
     .filter((p, i, a) => p && PROVIDERS[p]?.fetchQuote && a.indexOf(p) === i);
   const errors = [];
   for (const pid of order) {

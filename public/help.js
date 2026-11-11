@@ -139,6 +139,18 @@ const pl = [
     '**Moje konto** (menu z Twoim loginem lub Ustawienia → Ogólne): adres e-mail do powiadomień o pozycjach i zmiana hasła. Zmiana hasła wylogowuje pozostałe urządzenia.',
     'Zapomniane hasło resetuje administrator w managerze użytkowników. Jeśli nie ma dostępu żaden administrator, hasło zmienia się z wiersza poleceń serwera – opis jest w README.',
   ] },
+  { id: 'more', title: 'Bezpieczeństwo, skuteczność i dodatki', body: [
+    [
+      '**Weryfikacja dwuetapowa** – nowe konta konfigurują kod z aplikacji uwierzytelniającej zaraz po pierwszym logowaniu; pozostałe włączają go w Ustawienia → Ogólne. „Pamiętaj to urządzenie” pomija kod przez 90 dni. Zapisz kody zapasowe – każdy działa raz, gdy nie masz telefonu.',
+      '**Zielone światło i wynik od sygnału** – w tabeli instrumentów widać, kiedy instrument dostał decyzję „graj” i ile dałoby wejście zaraz po sygnale zgodnie z planem (stop z planu; koniec na stopie albo gdy kierunek wygasa lub się odwraca).',
+      '**Skuteczność algorytmu** – w Portfelu: w ilu przypadkach sygnał skończył się zyskiem, a w ilu stratą, osobno dla klas A i B. To test reguł na danych z ostatniego roku, bez spreadów i prowizji – nie obietnica.',
+      '**Ceny na żywo** – otwarte pozycje pokazują bieżącą cenę i wynik, odświeżane co kilkanaście sekund. Analiza wyboru zagrań zostaje na zamkniętych świecach.',
+      '**Grupy i załączniki** – administrator tworzy grupy czatu; do wiadomości można dołączyć plik do 5 MB, a grafiki otwierają się w podglądzie.',
+      '**Powiadomienia push** – włączasz je osobno na każdym urządzeniu w Ustawienia → Ogólne; przeglądarka zapyta o zgodę. Wymagają otwierania aplikacji przez HTTPS.',
+      '**Logi** – Ustawienia → Logi: logowania, pozycje, przebiegi analizy, błędy danych i zmiany ustawień, z filtrem rodzaju.',
+      '**Motywy** – administrator wybiera motyw Zwykły, Anime, Cosplay albo Własny z wgranymi obrazkami.',
+    ],
+  ] },
   { id: 'limits', title: 'Ograniczenia, o których warto pamiętać', body: [
     [
       'Yahoo Finance to źródło nieoficjalne: może przestać działać lub zwrócić błędne dane. Przy podejrzanych świecach porównaj z wykresem brokera.',
@@ -288,6 +300,18 @@ const en = [
     '**My account** (the menu with your username, or Settings → General): the e-mail address for position notifications and the password change. Changing the password signs out your other devices.',
     'A forgotten password is reset by an administrator in the user manager. If no administrator can sign in, the password is changed from the server command line – see the README.',
   ] },
+  { id: 'more', title: 'Security, accuracy and extras', body: [
+    [
+      '**Two-factor authentication** – new accounts set up a code from an authenticator app right after the first sign-in; others turn it on in Settings → General. “Remember this device” skips the code for 90 days. Store the recovery codes – each works once when you do not have your phone.',
+      '**Green light and result since signal** – the instrument table shows when an instrument got its “trade” decision and what entering right after the signal would have returned (stop from the plan; ends at the stop or when the direction fades or reverses).',
+      '**Algorithm accuracy** – on the Portfolio page: how often a signal ended in profit or loss, separately for grades A and B. It is a test of the rules on the last year of data, without spreads and commissions – not a promise.',
+      '**Live prices** – open positions show the current price and result, refreshed every few seconds. Trade selection stays on closed candles.',
+      '**Groups and attachments** – an administrator creates chat groups; a message can carry a file up to 5 MB and images open in a preview.',
+      '**Push notifications** – turn them on per device in Settings → General; the browser asks for permission. They need the app to be opened over HTTPS.',
+      '**Logs** – Settings → Logs: sign-ins, positions, analysis runs, data errors and settings changes, with a type filter.',
+      '**Themes** – an administrator picks Normal, Anime, Cosplay or Custom with uploaded images.',
+    ],
+  ] },
   { id: 'limits', title: 'Limitations worth remembering', body: [
     [
       'Yahoo Finance is an unofficial source: it may stop working or return wrong data. If candles look suspicious, compare them with your broker\'s chart.',
@@ -436,6 +460,18 @@ const de = [
     '**Nachrichten:** Der Umschlag neben der Glocke öffnet Unterhaltungen mit anderen Benutzern; die Zahl am Umschlag zeigt ungelesene Nachrichten.',
     '**Mein Konto** (Menü mit Ihrem Benutzernamen oder Einstellungen → Allgemein): E-Mail-Adresse für Positionsbenachrichtigungen und Passwortänderung. Eine Passwortänderung meldet Ihre anderen Geräte ab.',
     'Ein vergessenes Passwort setzt ein Administrator in der Benutzerverwaltung zurück. Kann sich kein Administrator anmelden, wird das Passwort über die Kommandozeile des Servers geändert – siehe README.',
+  ] },
+  { id: 'more', title: 'Sicherheit, Trefferquote und Extras', body: [
+    [
+      '**Zwei-Faktor-Authentifizierung** – neue Konten richten direkt nach der ersten Anmeldung einen Code aus einer Authenticator-App ein; andere aktivieren ihn unter Einstellungen → Allgemein. „Dieses Gerät merken“ überspringt den Code 90 Tage. Bewahren Sie die Wiederherstellungscodes auf – jeder funktioniert einmal, wenn das Telefon fehlt.',
+      '**Grünes Licht und Ergebnis seit Signal** – die Instrumententabelle zeigt, wann ein Instrument die Entscheidung „Handeln“ bekam und was ein Einstieg direkt nach dem Signal gebracht hätte (Stopp aus dem Plan; Ende am Stopp oder wenn die Richtung erlischt oder dreht).',
+      '**Trefferquote des Algorithmus** – auf der Portfolio-Seite: wie oft ein Signal mit Gewinn oder Verlust endete, getrennt für die Klassen A und B. Das ist ein Test der Regeln auf den Daten des letzten Jahres, ohne Spreads und Kommissionen – kein Versprechen.',
+      '**Live-Kurse** – offene Positionen zeigen aktuellen Kurs und Ergebnis, alle paar Sekunden aktualisiert. Die Auswahl der Trades bleibt auf geschlossenen Kerzen.',
+      '**Gruppen und Anhänge** – ein Administrator legt Chatgruppen an; einer Nachricht kann eine Datei bis 5 MB beiliegen, Bilder öffnen sich in einer Vorschau.',
+      '**Push-Benachrichtigungen** – je Gerät unter Einstellungen → Allgemein aktivieren; der Browser fragt nach der Erlaubnis. Sie erfordern den Aufruf der App über HTTPS.',
+      '**Protokolle** – Einstellungen → Protokolle: Anmeldungen, Positionen, Analyseläufe, Datenfehler und Einstellungsänderungen, mit Filter nach Art.',
+      '**Themen** – ein Administrator wählt Normal, Anime, Cosplay oder Eigenes mit hochgeladenen Bildern.',
+    ],
   ] },
   { id: 'limits', title: 'Einschränkungen, die man kennen sollte', body: [
     [
