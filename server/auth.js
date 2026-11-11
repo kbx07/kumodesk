@@ -17,22 +17,39 @@ export function verifyPassword(password, stored) {
   const want = Buffer.from(keyHex, 'hex');
   return key.length === want.length && crypto.timingSafeEqual(key, want);
 }
-const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
+function sha(t) { return crypto.createHash('sha256').update(t).digest('hex'); }
 
 export const validUsername = (u) => /^[A-Za-z0-9._-]{3,32}$/.test(String(u || ''));
 export const validPassword = (p) => typeof p === 'string' && p.length >= 8 && p.length <= 200;
 
-function readCookie(req) {
+const DEVICE = 'kd_device';
+const DEVICE_TTL = 90 * 24 * 3600 * 1000;
+
+function readCookie(req, name = COOKIE) {
   for (const part of String(req.headers.cookie || '').split(';')) {
     const i = part.indexOf('=');
-    if (i > 0 && part.slice(0, i).trim() === COOKIE) return part.slice(i + 1).trim();
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
   }
   return null;
 }
-function setCookie(req, res, value, maxAgeSec) {
+function setCookie(req, res, value, maxAgeSec, name = COOKIE) {
   const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
-  res.setHeader('Set-Cookie', `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure ? '; Secure' : ''}`);
+  const prev = res.getHeader('Set-Cookie');
+  const line = `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure ? '; Secure' : ''}`;
+  res.setHeader('Set-Cookie', prev ? [].concat(prev, line) : line);
 }
+
+/** „Pamiętaj to urządzenie”: osobne ciasteczko, dzięki któremu kod 2FA nie jest potrzebny przez 90 dni. */
+export function rememberDevice(req, res, userId) {
+  const token = crypto.randomBytes(32).toString('hex');
+  db.trustDevice(sha(token), userId, String(req.headers['user-agent'] || '').slice(0, 120), DEVICE_TTL);
+  setCookie(req, res, token, Math.floor(DEVICE_TTL / 1000), DEVICE);
+}
+export function deviceRemembered(req, userId) {
+  const token = readCookie(req, DEVICE);
+  return !!token && db.deviceTrusted(sha(token), userId);
+}
+export const clientIp = (req) => String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '';
 
 export function startSession(req, res, userId) {
   const token = crypto.randomBytes(32).toString('hex');
@@ -69,6 +86,8 @@ export function requireAuth(req, res, next) {
   const user = currentUser(req);
   if (!user) return res.status(401).json({ error: db.countUsers() === 0 ? 'err.setupNeeded' : 'err.loginNeeded' });
   req.user = user;
+  // konto z obowiązkową weryfikacją dwuetapową, która nie jest jeszcze włączona: tylko konfiguracja
+  if (user.twofa.required && !user.twofa.enabled && req.path !== '/status') return res.status(403).json({ error: 'err.twofaRequired' });
   next();
 }
 export function requireAdmin(req, res, next) {

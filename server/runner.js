@@ -60,6 +60,7 @@ export async function refresh({ groupId = null, trigger = 'manual' } = {}) {
       } catch (e) {
         db.markFetch(inst.id, e.message);
         job.errors.push({ id: inst.id, error: e.message });
+        db.addLog({ category: 'data', level: 'warn', code: 'data.fetchError', params: { id: inst.id, error: e.message.slice(0, 200) } });
       }
       job.done++;
     }
@@ -89,9 +90,10 @@ export async function refresh({ groupId = null, trigger = 'manual' } = {}) {
     let mail = null;
     const mode = settings.notify.mode;
     if (trigger === 'schedule' && fetched > 0 && smtpConfigured(settings) && (mode === 'report' || (mode === 'alerts' && alerts.length))) {
-      try { await sendReport({ market, alerts, group, settings, errors: job.errors }); mail = 'sent'; }
-      catch (e) { mail = `error: ${e.message}`; console.error('[mail]', e.message); }
+      try { await sendReport({ market, alerts, group, settings, errors: job.errors }); mail = 'sent'; db.addLog({ category: 'notify', code: 'notify.mail', params: { kind: 'report', to: settings.smtp.to } }); }
+      catch (e) { mail = `error: ${e.message}`; console.error('[mail]', e.message); db.addLog({ category: 'notify', level: 'error', code: 'notify.mailError', params: { error: e.message.slice(0, 200) } }); }
     }
+    db.addLog({ category: 'system', level: job.errors.length ? 'warn' : 'info', code: 'system.groupRun', params: { group: group?.name || '*', trigger, fetched, total: list.length, errors: job.errors.length, alerts: alerts.length } });
     return { ok: fetched > 0 || list.length === 0, fetched, total: list.length, errors: job.errors, alerts: alerts.length, mail };
   } finally {
     Object.assign(job, { running: false, current: null, finishedAt: new Date().toISOString() });
@@ -151,11 +153,13 @@ export async function checkPositions({ trigger = 'manual', userId = null } = {})
       const to = user?.email || (!user || user.role === 'admin' ? global.smtp.to : null);
       const mode = global.notify.positions;
       if (trigger === 'schedule' && to && smtpReady(global) && (mode === 'always' || (mode === 'changes' && changed.length))) {
-        try { await sendPositionsReport({ results, changed, settings, to }); mails.push('sent'); }
-        catch (e) { mails.push(`error: ${e.message}`); console.error('[mail]', e.message); }
+        try { await sendPositionsReport({ results, changed, settings, to }); mails.push('sent'); db.addLog({ user_id: owner, category: 'notify', code: 'notify.mail', params: { kind: 'positions', to } }); }
+        catch (e) { mails.push(`error: ${e.message}`); console.error('[mail]', e.message); db.addLog({ user_id: owner, category: 'notify', level: 'error', code: 'notify.mailError', params: { error: e.message.slice(0, 200) } }); }
       }
     }
     invalidate();
+    db.addLog({ category: 'system', code: 'system.h4Run', params: { trigger, checked: all.length, changed: allChanged.length, errors: job.errors.length } });
+    for (const c of allChanged) db.addLog({ user_id: c.user_id, category: 'trade', level: ACTION_RANK[c.advice.action] >= 4 ? 'warn' : 'info', code: 'trade.advice', params: { id: c.instrument_id, action: c.advice.action } });
     return { checked: all.length, changed: allChanged.map((c) => `${c.instrument_id}:${c.advice.action}`), errors: job.errors, mail: mails.length ? mails.join(',') : null };
   } finally {
     Object.assign(job, { running: false, current: null, finishedAt: new Date().toISOString() });

@@ -652,6 +652,20 @@ async function viewHistory() {
 
 // ---------- USTAWIENIA ----------
 let settingsTab = 'general';
+/** Sekcja 2FA w „Moje konto”. */
+function twofaCard() {
+  const tf = me.twofa || {};
+  const card = h('div', { class: 'card section-gap' }, h('h3', null, T('twofa.title'), h('span', { class: 'badge' }, h('span', { class: `dot ${tf.enabled ? 'good' : 'warn'}` }), T(tf.enabled ? 'twofa.on' : 'twofa.off'))));
+  const askPassword = (title, fn) => { const pw = h('input', { type: 'password', autocomplete: 'current-password', required: true }); const f = h('form', { class: 'form' }, h('label', { class: 'wide' }, T('acc.current'), pw)); openDialog(title, f, () => fn(pw.value)); };
+  const setupDialog = (password) => { const dlg = h('dialog', { class: 'ticket-dlg' }, h('h2', null, T('twofa.setup.title'))); dlg.append(twofaSetup({ password, withRemember: false, onDone: () => { dlg.close(); render(); } }), h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => dlg.close() }, T('cancel')))); dlg.addEventListener('close', () => { dlg.remove(); render(); }); document.body.append(dlg); dlg.showModal(); };
+  if (!tf.enabled) card.append(h('p', { class: 'muted' }, T('twofa.off.text')), h('button', { class: 'btn primary', onclick: () => setupDialog(null) }, T('twofa.enable')));
+  else card.append(h('p', { class: 'muted' }, T('twofa.on.text', { n: tf.recoveryLeft })), h('div', { class: 'actions', style: 'margin-top:0' },
+    h('button', { class: 'btn', onclick: () => askPassword(T('twofa.recovery.new'), async (pw) => { const r = await api('/auth/2fa/recovery', { method: 'POST', body: { password: pw } }); setTimeout(() => { const d2 = h('dialog', { class: 'ticket-dlg' }, h('h2', null, T('twofa.recovery.title')), h('p', { class: 'muted' }, T('twofa.recovery.text')), h('div', { class: 'codes' }, r.recovery.map((c) => h('code', null, c))), h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => d2.close() }, T('twofa.recovery.done')))); d2.addEventListener('close', () => { d2.remove(); api('/auth/state').then((st) => { me = st.user; render(); }); }); document.body.append(d2); d2.showModal(); }, 50); }) }, T('twofa.recovery.new')),
+    h('button', { class: 'btn', onclick: () => askPassword(T('twofa.change'), async (pw) => { setTimeout(() => setupDialog(pw), 50); }) }, T('twofa.change')),
+    h('button', { class: 'btn', onclick: async () => { await api('/auth/2fa/forget-devices', { method: 'POST' }); toast(T('twofa.devices.forgotten')); } }, T('twofa.devices.forget')),
+    !tf.required ? h('button', { class: 'btn danger', onclick: () => askPassword(T('twofa.disable'), async (pw) => { const r = await api('/auth/2fa/disable', { method: 'POST', body: { password: pw } }); me = r.user; render(); }) }, T('twofa.disable')) : null));
+  return card;
+}
 async function viewSettings() {
   const root = h('div', null, h('div', { class: 'muted' }, T('loading')));
   const [{ settings: s, providers, classes, loginBgs, appBgs, themes }, groups, instruments] = await Promise.all([api('/settings'), api('/groups'), api('/instruments')]);
@@ -713,7 +727,33 @@ async function viewSettings() {
       return h('div', null,
         h('div', { class: 'card' }, h('h3', null, T('set.tab.general')), f, h('p', { class: 'hint' }, `KumoDesk ${status?.version || ''}`)),
         h('div', { class: 'card section-gap' }, h('h3', null, T('acc.title'), h('span', { class: 'muted small' }, T('user.role.' + me.role))), acc),
+        twofaCard(),
         look ? h('div', { class: 'card section-gap' }, h('h3', null, T('look.title')), look, h('p', { class: 'hint' }, T('look.hint'))) : '');
+    },
+    logs() {
+      const box = h('div', { class: 'card' });
+      let cat = '', usr = '', rows = [], cats = [], done = false;
+      const LV = { info: 'good', warn: 'warn', error: 'crit' };
+      const load = async (more) => {
+        const q = new URLSearchParams({ limit: '100' }); if (cat) q.set('category', cat); if (usr) q.set('user', usr); if (more && rows.length) q.set('before', rows.at(-1).id);
+        const d = await api('/logs?' + q); cats = d.categories; rows = more ? rows.concat(d.rows) : d.rows; done = d.rows.length < 100; draw();
+      };
+      const csv = () => { const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`; const txt = ['time,level,category,user,event', ...rows.map((r) => [r.ts, r.level, r.category, r.user || 'system', T('log.' + r.code, r.params)].map(esc).join(','))].join('\n');
+        const a = h('a', { href: URL.createObjectURL(new Blob([txt], { type: 'text/csv' })), download: 'kumodesk-logs.csv' }); a.click(); };
+      const draw = () => box.replaceChildren(
+        h('h3', null, T('set.tab.logs'), h('span', { class: 'sharerow' },
+          h('select', { style: 'width:auto', onchange: (e) => { cat = e.target.value; load(); } }, h('option', { value: '' }, T('log.cat.all')), cats.map((c) => h('option', { value: c, selected: c === cat }, T('log.cat.' + c)))),
+          isAdmin() ? h('select', { style: 'width:auto', onchange: (e) => { usr = e.target.value; load(); } }, h('option', { value: '' }, T('log.user.all')), h('option', { value: 'system', selected: usr === 'system' }, T('log.user.system')),
+            (usersCache || []).map((u) => h('option', { value: u.id, selected: String(u.id) === usr }, u.username))) : null,
+          h('button', { class: 'btn sm', onclick: csv }, 'CSV'))),
+        rows.length ? h('div', { class: 'tablewrap' }, h('table', { class: 'logtable' },
+          h('thead', null, h('tr', null, [T('log.time'), T('log.category'), isAdmin() ? T('auth.username') : null, T('log.event'), isAdmin() ? 'IP' : null].filter(Boolean).map((x) => h('th', null, x)))),
+          h('tbody', null, rows.map((r) => h('tr', null, h('td', { class: 'muted small nowrap' }, h('span', { class: `dot ${LV[r.level] || ''}`, style: 'display:inline-block;margin-right:7px', title: r.level }), fmtTs(r.ts)),
+            h('td', { class: 'small' }, T('log.cat.' + r.category)), isAdmin() ? h('td', { class: 'small' }, r.user || T('log.user.system')) : null, h('td', null, T('log.' + r.code, r.params)),
+            isAdmin() ? h('td', { class: 'muted small' }, r.ip || '') : null))))) : h('p', { class: 'muted' }, T('log.none')),
+        !done ? h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => load(true) }, T('log.more'))) : '');
+      (isAdmin() && !usersCache ? api('/users').then((u) => { usersCache = u; }) : Promise.resolve()).then(() => load()).catch((e) => box.replaceChildren(h('div', { class: 'err' }, TE(e.message))));
+      return box;
     },
     users() {
       const box = h('div', null, h('div', { class: 'muted' }, T('loading')));
@@ -722,19 +762,20 @@ async function viewSettings() {
           field(T('auth.username'), h('input', { type: 'text', name: 'username', value: u?.username || '', required: true, disabled: !!u, minlength: 3, maxlength: 32, autocomplete: 'off' })),
           field(T('usr.role'), h('select', { name: 'role' }, ['user', 'admin'].map((r) => h('option', { value: r, selected: r === (u?.role || 'user') }, T('user.role.' + r))))),
           field(T('acc.email'), h('input', { type: 'email', name: 'email', value: u?.email || '', autocomplete: 'off' })),
-          field(T('auth.password'), h('input', { type: 'password', name: 'password', required: !u, minlength: 8, autocomplete: 'new-password', placeholder: u ? T('usr.password.keep') : '' }), T('auth.rules')));
+          field(T('auth.password'), h('input', { type: 'password', name: 'password', required: !u, minlength: 8, autocomplete: 'new-password', placeholder: u ? T('usr.password.keep') : '' }), T('auth.rules')),
+          u?.twofa?.enabled ? h('label', { class: 'inline-check wide' }, h('input', { type: 'checkbox', name: 'reset2fa' }), T('usr.reset2fa')) : null);
         dialog(u ? T('usr.edit', { name: u.username }) : T('usr.add'), f, async () => {
           const d = formData(f);
-          await api(u ? `/users/${u.id}` : '/users', { method: u ? 'PUT' : 'POST', body: u ? { role: d.role, email: d.email, ...(d.password ? { password: d.password } : {}) } : d });
+          await api(u ? `/users/${u.id}` : '/users', { method: u ? 'PUT' : 'POST', body: u ? { role: d.role, email: d.email, reset2fa: d.reset2fa === 'on', ...(d.password ? { password: d.password } : {}) } : d });
         }, T('usr.hint'));
       };
       api('/users').then((list) => {
         box.replaceChildren(h('div', { class: 'card' }, h('h3', null, T('set.tab.users'), h('button', { class: 'btn sm', onclick: () => userDialog(null) }, '+ ' + T('usr.add'))),
           h('div', { class: 'tablewrap' }, h('table', null,
-            h('thead', null, h('tr', null, [T('auth.username'), T('usr.role'), T('acc.email'), T('usr.created'), ''].map((x) => h('th', null, x)))),
+            h('thead', null, h('tr', null, [T('auth.username'), T('usr.role'), T('acc.email'), '2FA', T('usr.created'), ''].map((x) => h('th', null, x)))),
             h('tbody', null, list.map((u) => h('tr', null,
               h('td', null, h('span', { class: 'nowrap' }, h('span', { class: 'avatar', style: 'margin-right:8px' }, u.username.slice(0, 1).toUpperCase()), h('b', null, u.username), u.id === me.id ? h('span', { class: 'name' }, T('usr.you')) : null)),
-              h('td', null, T('user.role.' + u.role)), h('td', { class: 'muted' }, u.email || '–'), h('td', { class: 'muted small' }, fmtTs(u.created)),
+              h('td', null, T('user.role.' + u.role)), h('td', { class: 'muted' }, u.email || '–'), h('td', null, h('span', { class: 'badge' }, h('span', { class: `dot ${u.twofa.enabled ? 'good' : 'warn'}` }), T(u.twofa.enabled ? 'twofa.on' : 'twofa.off'))), h('td', { class: 'muted small' }, fmtTs(u.created)),
               h('td', { class: 'nowrap' }, h('button', { class: 'btn sm', onclick: () => userDialog(u) }, T('edit')), ' ',
                 u.id !== me.id ? h('button', { class: 'btn sm danger', onclick: async () => { if (!confirm(T('usr.confirmDelete', { name: u.username }))) return; try { await api(`/users/${u.id}`, { method: 'DELETE' }); render(); } catch (e) { toast(TE(e.message), true); } } }, T('delete')) : null)))))),
           h('p', { class: 'hint' }, T('usr.info'))));
@@ -982,7 +1023,7 @@ async function viewSettings() {
     document.body.append(dlg); dlg.showModal();
   }
 
-  const tabs = isAdmin() ? ['general', 'users', 'capital', 'data', 'analysis', 'groups', 'instruments', 'notify', 'risk'] : ['general', 'capital', 'risk'];
+  const tabs = isAdmin() ? ['general', 'users', 'capital', 'data', 'analysis', 'groups', 'instruments', 'notify', 'risk', 'logs'] : ['general', 'capital', 'risk', 'logs'];
   if (!tabs.includes(settingsTab)) settingsTab = 'general';
   const body = h('div');
   const tabBar = h('div', { class: 'tabs' }, tabs.map((k) => h('button', { class: k === settingsTab ? 'on' : '', onclick: () => { settingsTab = k; render(); } }, T('set.tab.' + k))));
@@ -1012,7 +1053,7 @@ async function showAuth() {
   try { st = await api('/auth/state'); } catch { st = { setup: false, user: null, appearance: lookCfg }; }
   lookCfg = st.appearance || lookCfg;
   applyLook();
-  if (st.user) { me = st.user; $('#auth').hidden = true; document.body.classList.remove('locked'); return true; }
+  if (st.user) { me = st.user; if (needEnrol()) { showEnrol(); return false; } $('#auth').hidden = true; document.body.classList.remove('locked'); return true; }
   const setup = st.setup;
   const err = h('div', { class: 'err small', role: 'alert' });
   const user = h('input', { type: 'text', name: 'username', autocomplete: 'username', required: true, minlength: 3, maxlength: 32, autofocus: true });
@@ -1020,9 +1061,15 @@ async function showAuth() {
   const pass2 = h('input', { type: 'password', name: 'password2', autocomplete: 'new-password', required: true, minlength: 8 });
   const email = h('input', { type: 'email', name: 'email', autocomplete: 'email' });
   const btn = h('button', { class: 'btn primary' }, T(setup ? 'auth.submit.setup' : 'auth.submit.login'));
+  const code = h('input', { type: 'text', name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 12, placeholder: '123456' });
+  const remember = h('input', { type: 'checkbox', name: 'remember', style: 'width:auto;height:auto' });
+  const codeBox = h('div', { hidden: true, style: 'display:grid;gap:10px' }, h('label', null, T('twofa.code'), code, h('span', { class: 'muted' }, T('twofa.code.hint'))),
+    h('label', { class: 'inline-check' }, remember, T('twofa.remember')));
+  let needCode = false;
   const form = h('form', { class: 'authform' },
     h('label', null, T('auth.username'), user),
     h('label', null, T('auth.password'), pass),
+    codeBox,
     setup ? h('label', null, T('auth.password2'), pass2) : null,
     setup ? h('label', null, T('auth.email'), email, h('span', { class: 'muted' }, T('auth.email.hint'))) : null,
     err, btn,
@@ -1032,10 +1079,13 @@ async function showAuth() {
     if (setup && pass.value !== pass2.value) { err.textContent = T('auth.mismatch'); return; }
     btn.disabled = true;
     try {
-      const r = await api(setup ? '/auth/setup' : '/auth/login', { method: 'POST', body: { username: user.value.trim(), password: pass.value, email: email.value.trim() } });
-      me = r.user; $('#auth').hidden = true; document.body.classList.remove('locked');
+      const r = await api(setup ? '/auth/setup' : '/auth/login', { method: 'POST', body: { username: user.value.trim(), password: pass.value, email: email.value.trim(), ...(needCode ? { code: code.value.trim(), remember: remember.checked } : {}) } });
+      if (r.twofa) { needCode = true; codeBox.hidden = false; code.required = true; code.focus(); btn.disabled = false; return; }
+      me = r.user;
+      if (needEnrol()) { showEnrol(); btn.disabled = false; return; }
+      $('#auth').hidden = true; document.body.classList.remove('locked');
       startApp();
-    } catch (ex) { err.textContent = TE(ex.message); pass.value = ''; pass.focus(); }
+    } catch (ex) { err.textContent = TE(ex.message); if (needCode) { code.value = ''; code.focus(); } else { pass.value = ''; pass.focus(); } }
     btn.disabled = false;
   };
   const langSel = h('select', { class: 'lang', 'aria-label': 'Language', onchange: (e) => { langPref = e.target.value; store.set('kd.lang', langPref); lang = langPref === 'auto' ? detectLang(navigator.languages || [navigator.language]) : resolveLang(langPref); showAuth(); } },
@@ -1053,6 +1103,45 @@ async function showAuth() {
   el.hidden = false; document.body.classList.add('locked');
   setTimeout(() => user.focus(), 30);
   return false;
+}
+const needEnrol = () => !!me && me.twofa?.required && !me.twofa?.enabled;
+/** Formularz włączania 2FA: kod QR, sekret, potwierdzenie kodem, kody zapasowe. Zwraca węzeł; onDone po zakończeniu. */
+function twofaSetup({ password = null, onDone, withRemember = true }) {
+  const box = h('div', { class: 'twofa' }, h('div', { class: 'muted' }, T('loading')));
+  api('/auth/2fa/begin', { method: 'POST', body: password ? { password } : {} }).then((d) => {
+    const code = h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 6, required: true, placeholder: '123456' });
+    const remember = h('input', { type: 'checkbox', checked: true, style: 'width:auto;height:auto' });
+    const err = h('div', { class: 'err small' });
+    const form = h('form', { class: 'authform' },
+      h('ol', { class: 'steps' }, h('li', null, T('twofa.step1')), h('li', null, T('twofa.step2')), h('li', null, T('twofa.step3'))),
+      h('div', { class: 'qr', html: d.qr }),
+      h('div', { class: 'muted small' }, T('twofa.manual')), h('code', { class: 'secret' }, d.secret.replace(/(.{4})/g, '$1 ').trim()),
+      h('label', null, T('twofa.code'), code), withRemember ? h('label', { class: 'inline-check' }, remember, T('twofa.remember')) : null, err,
+      h('button', { class: 'btn primary' }, T('twofa.enable')));
+    form.onsubmit = async (e) => {
+      e.preventDefault(); err.textContent = '';
+      try {
+        const r = await api('/auth/2fa/enable', { method: 'POST', body: { code: code.value.trim(), remember: withRemember && remember.checked } });
+        me = r.user;
+        box.replaceChildren(h('h2', { style: 'margin:0 0 6px;font-size:17px' }, T('twofa.recovery.title')), h('p', { class: 'muted' }, T('twofa.recovery.text')),
+          h('div', { class: 'codes' }, r.recovery.map((c) => h('code', null, c))),
+          h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', onclick: () => { navigator.clipboard?.writeText(r.recovery.join('\n')); toast(T('copied')); } }, T('copy')),
+            h('button', { class: 'btn primary', type: 'button', onclick: () => onDone() }, T('twofa.recovery.done'))));
+      } catch (ex) { err.textContent = TE(ex.message); code.value = ''; code.focus(); }
+    };
+    box.replaceChildren(form); setTimeout(() => code.focus(), 30);
+  }).catch((e) => box.replaceChildren(h('div', { class: 'err' }, TE(e.message))));
+  return box;
+}
+/** Obowiązkowa konfiguracja 2FA zaraz po zalogowaniu na nowe konto. */
+function showEnrol() {
+  const el = $('#auth');
+  el.className = `auth lbg-${(lookCfg.theme || 'normal') === 'normal' ? lookCfg.loginBg : 'theme'}`;
+  el.replaceChildren(h('div', { class: 'authbg', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')),
+    h('div', { class: 'authcard' }, h('h1', null, T('twofa.setup.title')), h('p', { class: 'muted' }, T('twofa.setup.sub')),
+      twofaSetup({ onDone: () => { el.hidden = true; document.body.classList.remove('locked'); startApp(); } }),
+      h('div', { class: 'authfoot' }, h('button', { class: 'btn sm', onclick: () => logout() }, T('user.logout')), h('span'))));
+  el.hidden = false; document.body.classList.add('locked');
 }
 async function logout() { try { await api('/auth/logout', { method: 'POST' }); } catch { /* i tak wylogowujemy */ } me = null; market = null; status = null; location.hash = '#/'; showAuth(); }
 

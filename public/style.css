@@ -495,3 +495,13 @@ body.locked[data-theme]:not([data-theme="normal"]) { background: var(--page); }
 body.locked .decor { z-index: 99; } .auth { z-index: 100; }
 body.locked .decor .fig { opacity: .85; } body.locked .bit { opacity: .8; }
 .thm-normal { background: var(--surface-2); } .thm-anime { background: linear-gradient(135deg, #ff7eb6, #b79cff); } .thm-cosplay { background: linear-gradient(135deg, #35e0ff, #b14bff 55%, #ff4fd8); } .thm-custom { background: repeating-linear-gradient(45deg, var(--surface-2) 0 8px, var(--grid) 8px 16px); }
+
+/* 2FA i logi */
+.twofa .steps { margin: 0; padding-left: 18px; color: var(--ink-2); display: grid; gap: 4px; font-size: 13px; }
+.qr { background: #fff; border-radius: 8px; padding: 8px; width: 190px; justify-self: center; margin: 4px auto; }
+.qr svg { display: block; width: 100%; height: auto; }
+.secret { font: 13px ui-monospace, monospace; background: var(--surface-2); padding: 6px 9px; border-radius: 4px; letter-spacing: .5px; user-select: all; overflow-wrap: anywhere; }
+.codes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 10px 0; }
+.codes code { font: 14px ui-monospace, monospace; background: var(--surface-2); padding: 6px 10px; border-radius: 4px; text-align: center; user-select: all; }
+.logtable td { padding: 5px 8px; } .logtable tr:hover td { background: var(--surface-2); }
+.card h3 select { height: 28px; font-weight: 400; }

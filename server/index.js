@@ -12,13 +12,15 @@ import { closedH4 } from './positions.js';
 import { startScheduler } from './scheduler.js';
 import { sendTest, smtpConfigured } from './mailer.js';
 import * as auth from './auth.js';
+import * as totp from './totp.js';
+import QRCode from 'qrcode';
 import { isValidTimezone, hhmmToMinutes, nextRun, localParts, isBarClosed } from './timeutil.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3003;
 const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
-const VERSION = '2.1.0';
+const VERSION = '2.2.0';
 
 db.openDb(path.join(DATA_DIR, 'kumodesk.db'));
 
@@ -58,6 +60,10 @@ function publicSettings(user) {
   return { ...s, smtp: { host: '', port: 587, security: 'starttls', user: '', pass: '', from: '', to: '', passSet: false }, data: { ...s.data, twelvedataKey: '', stooqKey: '' } };
 }
 
+/** Wpis do dziennika zdarzeń. */
+const log = (req, category, code, params = {}, level = 'info', userId = undefined) =>
+  db.addLog({ user_id: userId !== undefined ? userId : (req?.user?.id ?? null), category, level, code, params, ip: req ? auth.clientIp(req) : null });
+
 // ---------- logowanie ----------
 const appearance = () => db.getSettings().appearance;
 const loginKey = (req, username) => `${req.socket.remoteAddress}|${String(username || '').toLowerCase()}`;
@@ -72,20 +78,81 @@ app.post('/api/auth/setup', wrap((req, res) => {
   const user = db.createUser({ username: String(username), pass_hash: auth.hashPassword(password), role: 'admin', email: String(email || '').trim().slice(0, 200) });
   auth.startSession(req, res, user.id);
   invalidate();
+  log(req, 'auth', 'auth.setup', {}, 'info', user.id);
   res.status(201).json({ user });
 }));
 app.post('/api/auth/login', wrap((req, res) => {
-  const { username, password } = req.body || {};
+  const { username, password, code, remember } = req.body || {};
   const key = loginKey(req, username);
   if (!auth.loginAllowed(key)) throw Object.assign(new Error('err.loginLocked'), { status: 429 });
   const u = db.getUserAuth(String(username || ''));
   // sprawdzamy hasło także dla nieistniejącego loginu, żeby czas odpowiedzi nie zdradzał, czy konto istnieje
   const ok = auth.verifyPassword(String(password || ''), u ? u.pass_hash : 'scrypt$00$00') && !!u;
-  if (!ok) { auth.loginFailed(key); throw Object.assign(new Error('err.loginBad'), { status: 401 }); }
+  if (!ok) { auth.loginFailed(key); log(req, 'auth', 'auth.loginFailed', { username: String(username || '').slice(0, 40) }, 'warn', u ? u.id : null); throw Object.assign(new Error('err.loginBad'), { status: 401 }); }
+  // drugi etap: kod z aplikacji albo kod zapasowy, chyba że urządzenie jest zapamiętane
+  if (u.totp_enabled && !auth.deviceRemembered(req, u.id)) {
+    if (!code) return res.json({ twofa: true });
+    const counter = totp.verify(u.totp_secret, code, { lastCounter: u.totp_last });
+    if (counter != null) db.setTotpLast(u.id, counter);
+    else {
+      const left = JSON.parse(u.recovery || '[]'), hsh = totp.hashCode(code);
+      if (!left.includes(hsh)) { auth.loginFailed(key); log(req, 'auth', 'auth.twofaFail', {}, 'warn', u.id); throw Object.assign(new Error('err.twofaBad'), { status: 401 }); }
+      db.setRecovery(u.id, left.filter((x) => x !== hsh));
+      log(req, 'auth', 'auth.recoveryUsed', { left: left.length - 1 }, 'warn', u.id);
+    }
+    if (remember) auth.rememberDevice(req, res, u.id);
+  }
   auth.loginOk(key);
   auth.startSession(req, res, u.id);
+  log(req, 'auth', 'auth.login', {}, 'info', u.id);
+  // obecnym kontom bez 2FA przypominamy raz w dzwonku
+  if (!u.totp_enabled && !u.totp_required && !u.totp_nagged) {
+    db.saveAlerts([{ type: 'SECURITY', severity: 'MED', user_id: u.id, message: JSON.stringify({ code: 'alert.twofa', params: {} }) }]);
+    db.markNagged(u.id);
+  }
   res.json({ user: db.getUser(u.id) });
 }));
+
+// ---------- weryfikacja dwuetapowa (wymaga sesji; działa także, gdy 2FA jest dopiero obowiązkowa) ----------
+const sessionUser = (req) => { const u = auth.currentUser(req); if (!u) throw Object.assign(new Error('err.loginNeeded'), { status: 401 }); return u; };
+app.post('/api/auth/2fa/begin', wrap(async (req, res) => {
+  const u = sessionUser(req), full = db.getUserAuthById(u.id);
+  // zmiana już włączonej weryfikacji wymaga hasła
+  if (full.totp_enabled && !auth.verifyPassword(String(req.body?.password || ''), full.pass_hash)) throw bad('err.passwordCurrent');
+  const secret = totp.newSecret();
+  db.setTotpPending(u.id, secret);
+  const url = totp.otpauthUrl(secret, u.username);
+  res.json({ secret, url, qr: await QRCode.toString(url, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }) });
+}));
+app.post('/api/auth/2fa/enable', wrap((req, res) => {
+  const u = sessionUser(req), full = db.getUserAuthById(u.id);
+  if (!full.totp_pending) throw bad('err.twofaBegin');
+  const counter = totp.verify(full.totp_pending, req.body?.code);
+  if (counter == null) throw bad('err.twofaBad');
+  const codes = totp.newRecoveryCodes();
+  db.enableTotp(u.id, full.totp_pending, counter, codes.map(totp.hashCode));
+  if (req.body?.remember) auth.rememberDevice(req, res, u.id);
+  log(req, 'auth', 'auth.twofaOn', {}, 'info', u.id);
+  res.json({ user: db.getUser(u.id), recovery: codes });
+}));
+app.post('/api/auth/2fa/disable', wrap((req, res) => {
+  const u = sessionUser(req), full = db.getUserAuthById(u.id);
+  if (full.totp_required) throw bad('err.twofaMandatory');
+  if (!auth.verifyPassword(String(req.body?.password || ''), full.pass_hash)) throw bad('err.passwordCurrent');
+  db.disableTotp(u.id);
+  log(req, 'auth', 'auth.twofaOff', {}, 'warn', u.id);
+  res.json({ user: db.getUser(u.id) });
+}));
+app.post('/api/auth/2fa/recovery', wrap((req, res) => {
+  const u = sessionUser(req), full = db.getUserAuthById(u.id);
+  if (!full.totp_enabled) throw bad('err.twofaBegin');
+  if (!auth.verifyPassword(String(req.body?.password || ''), full.pass_hash)) throw bad('err.passwordCurrent');
+  const codes = totp.newRecoveryCodes();
+  db.setRecovery(u.id, codes.map(totp.hashCode));
+  res.json({ recovery: codes });
+}));
+app.post('/api/auth/2fa/forget-devices', wrap((req, res) => { const u = sessionUser(req); db.forgetDevices(u.id); res.json({ ok: true }); }));
+app.get('/api/auth/2fa/devices', wrap((req, res) => res.json(db.listDevices(sessionUser(req).id))));
 // obrazki własnego motywu – widoczne także na ekranie logowania
 app.get('/api/auth/theme/:slot', wrap((req, res) => {
   const slot = req.params.slot, meta = appearance().custom?.[slot];
@@ -93,7 +160,7 @@ app.get('/api/auth/theme/:slot', wrap((req, res) => {
   res.setHeader('Content-Type', meta.type); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Cache-Control', 'private, max-age=86400');
   fs.createReadStream(path.join(THEME_DIR, slot)).on('error', () => res.status(404).end()).pipe(res);
 }));
-app.post('/api/auth/logout', wrap((req, res) => { auth.endSession(req, res); res.json({ ok: true }); }));
+app.post('/api/auth/logout', wrap((req, res) => { const u = auth.currentUser(req); if (u) log(req, 'auth', 'auth.logout', {}, 'info', u.id); auth.endSession(req, res); res.json({ ok: true }); }));
 
 // ---------- konto i użytkownicy ----------
 const cleanEmail = (e) => { const v = String(e || '').trim().slice(0, 200); if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw bad('err.email'); return v; };
@@ -107,7 +174,7 @@ app.put('/api/account', wrap((req, res) => {
     patch.pass_hash = auth.hashPassword(b.password);
   }
   const user = db.updateUser(req.user.id, patch);
-  if (patch.pass_hash) auth.startSession(req, res, user.id); // zmiana hasła wylogowuje inne urządzenia
+  if (patch.pass_hash) { auth.startSession(req, res, user.id); log(req, 'auth', 'auth.password'); } // zmiana hasła wylogowuje inne urządzenia
   res.json({ user });
 }));
 // lista do wyboru odbiorcy (udostępnianie, wiadomości): bez adresów e-mail dla zwykłych użytkowników
@@ -117,6 +184,7 @@ app.post('/api/users', admin, wrap((req, res) => {
   if (!auth.validUsername(username)) throw bad('err.username');
   if (!auth.validPassword(password)) throw bad('err.password');
   if (db.getUserAuth(String(username))) throw bad('err.userExists');
+  log(req, 'admin', 'admin.userAdd', { name: String(username) });
   res.status(201).json(db.createUser({ username: String(username), pass_hash: auth.hashPassword(password), role: role === 'admin' ? 'admin' : 'user', email: cleanEmail(email) }));
 }));
 app.put('/api/users/:id', admin, wrap((req, res) => {
@@ -129,6 +197,8 @@ app.put('/api/users/:id', admin, wrap((req, res) => {
   }
   if (b.email !== undefined) patch.email = cleanEmail(b.email);
   if (b.password) { if (!auth.validPassword(b.password)) throw bad('err.password'); patch.pass_hash = auth.hashPassword(b.password); }
+  if (b.reset2fa) db.disableTotp(id); // użytkownik skonfiguruje weryfikację od nowa przy logowaniu
+  log(req, 'admin', 'admin.userEdit', { name: cur.username, reset2fa: !!b.reset2fa, password: !!b.password });
   res.json(db.updateUser(id, patch));
 }));
 app.delete('/api/users/:id', admin, wrap((req, res) => {
@@ -137,6 +207,7 @@ app.delete('/api/users/:id', admin, wrap((req, res) => {
   if (id === req.user.id) throw bad('err.deleteSelf');
   if (cur.role === 'admin' && db.countAdmins() <= 1) throw bad('err.lastAdmin');
   db.deleteUser(id); invalidate();
+  log(req, 'admin', 'admin.userDelete', { name: cur.username });
   res.json({ ok: true });
 }));
 
@@ -160,6 +231,15 @@ app.delete('/api/theme/:slot', admin, wrap((req, res) => {
   const all = db.getSettings(); all.appearance.custom = custom;
   db.replaceSetting('appearance', all.appearance);
   res.json({ appearance: appearance() });
+}));
+
+// ---------- logi ----------
+const LOG_CATEGORIES = ['auth', 'trade', 'system', 'data', 'notify', 'admin'];
+app.get('/api/logs', wrap((req, res) => {
+  const q = req.query, isAdm = req.user.role === 'admin';
+  const category = LOG_CATEGORIES.includes(q.category) ? q.category : null;
+  const rows = db.listLogs({ all: isAdm, userId: isAdm ? (q.user === 'system' ? 0 : Number(q.user) || null) : req.user.id, category, before: Number(q.before) || null, limit: Number(q.limit) || 100 });
+  res.json({ categories: LOG_CATEGORIES, rows: rows.map((r) => ({ id: r.id, ts: r.ts, user: r.username || null, category: r.category, level: r.level, code: r.code, params: r.params, ip: isAdm ? r.ip : undefined })) });
 }));
 
 // ---------- udostępnianie portfela ----------
@@ -368,6 +448,7 @@ app.put('/api/settings', wrap((req, res) => {
   for (const k of db.PERSONAL_KEYS) delete patch[k];
   if (globalKeys.length) db.saveSettings(patch);
   if (Object.keys(personal).length) db.saveUserSettings(req.user.id, personal);
+  log(req, globalKeys.length ? 'admin' : 'trade', 'admin.settings', { keys: [...globalKeys, ...Object.keys(personal)].join(', ') });
   invalidate();
   res.json({ settings: publicSettings(req.user) });
 }));
@@ -477,12 +558,14 @@ app.post('/api/instruments/import', admin, wrap((req, res) => {
     added++;
   }
   invalidate();
+  log(req, 'admin', 'admin.import', { added, category });
   res.json({ added, skipped, invalid });
 }));
 app.post('/api/categories/toggle', admin, wrap((req, res) => {
   const { category, enabled } = req.body || {};
   if (!category) throw bad('err.category');
   const changed = db.setCategoryEnabled(String(category), !!enabled);
+  log(req, 'admin', 'admin.category', { category: String(category), enabled: !!enabled });
   invalidate();
   res.json({ changed });
 }));
@@ -546,6 +629,7 @@ app.post('/api/positions', wrap(async (req, res) => {
   }
   const id = db.savePosition(p);
   invalidate(); kickH4(req.user.id);
+  log(req, 'trade', 'trade.open', { id: p.instrument_id, dir: p.direction, risk: p.risk_pct });
   res.status(201).json({ id, entry: p.entry, quote });
 }));
 app.post('/api/positions/:id/close', wrap(async (req, res) => {
@@ -565,6 +649,7 @@ app.post('/api/positions/:id/close', wrap(async (req, res) => {
   });
   db.deletePosition(pos.id);
   invalidate();
+  log(req, 'trade', 'trade.close', { id: pos.instrument_id, r: r != null ? Math.round(r * 100) / 100 : null });
   res.json({ tradeId, r, exit });
 }));
 app.get('/api/capital', wrap((req, res) => {
@@ -578,13 +663,14 @@ app.delete('/api/trades/:id', wrap((req, res) => {
   db.deleteTrade(t.id); res.json({ ok: true });
 }));
 app.put('/api/positions/:id', wrap((req, res) => { ownPosition(req); db.savePosition(validPosition({ ...req.body, id: req.params.id })); invalidate(); res.json({ ok: true }); }));
-app.delete('/api/positions/:id', wrap((req, res) => { db.deletePosition(ownPosition(req).id); invalidate(); res.json({ ok: true }); }));
+app.delete('/api/positions/:id', wrap((req, res) => { const pos = ownPosition(req); db.deletePosition(pos.id); invalidate(); log(req, 'trade', 'trade.delete', { id: pos.instrument_id }); res.json({ ok: true }); }));
 
 // ---------- statyczne ----------
 app.use(express.static(path.join(ROOT, 'public'), { extensions: ['html'], maxAge: 0 }));
 app.use('/api', (req, res) => res.status(404).json({ error: 'err.notFound' }));
 
 app.listen(PORT, HOST, () => {
+  db.addLog({ category: 'system', code: 'system.start', params: { version: VERSION } });
   console.log(`KumoDesk ${VERSION} – http://${HOST}:${PORT} (dane: ${DATA_DIR})`);
   if (process.env.KUMODESK_NO_SCHEDULER !== '1') startScheduler();
 });

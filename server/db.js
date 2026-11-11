@@ -138,6 +138,35 @@ export function openDb(file) {
     );
   `);
   addColumn('trades', 'user_id', 'INTEGER');
+  // weryfikacja dwuetapowa
+  addColumn('users', 'totp_secret', 'TEXT');
+  addColumn('users', 'totp_pending', 'TEXT');
+  addColumn('users', 'totp_enabled', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('users', 'totp_last', 'INTEGER NOT NULL DEFAULT -1');
+  addColumn('users', 'totp_required', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('users', 'totp_nagged', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('users', 'recovery', "TEXT NOT NULL DEFAULT '[]'");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS trusted_devices (
+      token_hash TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      label TEXT,
+      created TEXT NOT NULL,
+      expires INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts TEXT NOT NULL,
+      user_id INTEGER,
+      category TEXT NOT NULL,
+      level TEXT NOT NULL DEFAULT 'info',
+      code TEXT NOT NULL,
+      params TEXT NOT NULL DEFAULT '{}',
+      ip TEXT
+    );
+    CREATE INDEX IF NOT EXISTS logs_user ON logs (user_id, id);
+    CREATE INDEX IF NOT EXISTS logs_cat ON logs (category, id);
+  `);
   seed();
   // jednorazowo: waluta rachunku PLN -> EUR (na prośbę właściciela instalacji); kwoty zostają bez zmian
   if (!getMeta('currencyEur')) {
@@ -391,7 +420,8 @@ export const countAlertsAfter = (id, userId) => db.prepare('SELECT COUNT(*) n FR
 export const listAlerts = (limit, userId) => db.prepare('SELECT * FROM alerts WHERE user_id IS NULL OR user_id = ? ORDER BY id DESC LIMIT ?').all(userId, limit);
 
 // ---------- użytkownicy i sesje ----------
-const pubUser = (u) => u && ({ id: u.id, username: u.username, role: u.role, email: u.email || '', created: u.created });
+const pubUser = (u) => u && ({ id: u.id, username: u.username, role: u.role, email: u.email || '', created: u.created,
+  twofa: { enabled: !!u.totp_enabled, required: !!u.totp_required, recoveryLeft: safeJson(u.recovery, []).length } });
 export const countUsers = () => db.prepare('SELECT COUNT(*) n FROM users').get().n;
 export const countAdmins = () => db.prepare("SELECT COUNT(*) n FROM users WHERE role = 'admin'").get().n;
 export const listUsers = () => db.prepare('SELECT * FROM users ORDER BY username').all().map(pubUser);
@@ -400,7 +430,8 @@ export const getUserAuth = (username) => db.prepare('SELECT * FROM users WHERE u
 export const getUserAuthById = (id) => db.prepare('SELECT * FROM users WHERE id = ?').get(Number(id));
 export function createUser({ username, pass_hash, role, email }) {
   const first = countUsers() === 0;
-  const id = Number(db.prepare('INSERT INTO users (username, pass_hash, role, email, created) VALUES (?,?,?,?,?)')
+  // nowe konta muszą skonfigurować weryfikację dwuetapową
+  const id = Number(db.prepare('INSERT INTO users (username, pass_hash, role, email, created, totp_required) VALUES (?,?,?,?,?,1)')
     .run(username, pass_hash, role, email || null, new Date().toISOString()).lastInsertRowid);
   // nowe konto nie dostaje zaległych powiadomień sprzed swojego utworzenia
   if (!first) db.prepare('UPDATE users SET bell_seen = (SELECT COALESCE(MAX(id), 0) FROM alerts) WHERE id = ?').run(id);
@@ -423,6 +454,7 @@ export function deleteUser(id) {
   for (const t of ['positions', 'trades']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(id);
   db.prepare('DELETE FROM alerts WHERE user_id = ?').run(id);
   db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id);
+  db.prepare('DELETE FROM trusted_devices WHERE user_id = ?').run(id);
   db.prepare('DELETE FROM portfolio_shares WHERE owner_id = ? OR viewer_id = ?').run(id, id);
   db.prepare('DELETE FROM messages WHERE from_id = ? OR to_id = ?').run(id, id);
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
@@ -469,4 +501,43 @@ export function threadSummaries(me) {
     SUM(CASE WHEN to_id = ? AND read_at IS NULL THEN 1 ELSE 0 END) unread
     FROM messages WHERE from_id = ? OR to_id = ? GROUP BY other`).all(me, me, me, me);
   return rows.map((r) => ({ other: r.other, unread: r.unread, last: parseMsg(db.prepare('SELECT * FROM messages WHERE id = ?').get(r.last_id)) }));
+}
+
+// ---------- weryfikacja dwuetapowa ----------
+export const setTotpPending = (id, secret) => db.prepare('UPDATE users SET totp_pending = ? WHERE id = ?').run(secret, id);
+export function enableTotp(id, secret, counter, recoveryHashes) {
+  db.prepare('UPDATE users SET totp_secret = ?, totp_pending = NULL, totp_enabled = 1, totp_last = ?, recovery = ? WHERE id = ?').run(secret, counter, JSON.stringify(recoveryHashes), id);
+}
+export function disableTotp(id) {
+  db.prepare("UPDATE users SET totp_secret = NULL, totp_pending = NULL, totp_enabled = 0, totp_last = -1, recovery = '[]' WHERE id = ?").run(id);
+  db.prepare('DELETE FROM trusted_devices WHERE user_id = ?').run(id);
+}
+export const setTotpLast = (id, counter) => db.prepare('UPDATE users SET totp_last = ? WHERE id = ?').run(counter, id);
+export const setRecovery = (id, hashes) => db.prepare('UPDATE users SET recovery = ? WHERE id = ?').run(JSON.stringify(hashes), id);
+export const markNagged = (id) => db.prepare('UPDATE users SET totp_nagged = 1 WHERE id = ?').run(id);
+export function trustDevice(tokenHash, userId, label, ttlMs) {
+  db.prepare('DELETE FROM trusted_devices WHERE expires < ?').run(Date.now());
+  db.prepare('INSERT INTO trusted_devices (token_hash, user_id, label, created, expires) VALUES (?,?,?,?,?)').run(tokenHash, userId, label || null, new Date().toISOString(), Date.now() + ttlMs);
+}
+export const deviceTrusted = (tokenHash, userId) => !!db.prepare('SELECT 1 FROM trusted_devices WHERE token_hash = ? AND user_id = ? AND expires > ?').get(tokenHash, userId, Date.now());
+export const listDevices = (userId) => db.prepare('SELECT label, created, expires FROM trusted_devices WHERE user_id = ? AND expires > ? ORDER BY created DESC').all(userId, Date.now());
+export const forgetDevices = (userId) => db.prepare('DELETE FROM trusted_devices WHERE user_id = ?').run(userId);
+
+// ---------- logi ----------
+export function addLog({ user_id = null, category, level = 'info', code, params = {}, ip = null }) {
+  try {
+    db.prepare('INSERT INTO logs (ts, user_id, category, level, code, params, ip) VALUES (?,?,?,?,?,?,?)').run(new Date().toISOString(), user_id, category, level, code, JSON.stringify(params), ip);
+    if (Math.random() < 0.01) db.exec('DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 20000)');
+  } catch (e) { console.error('[log]', e.message); }
+}
+/** scope: { all: true } dla administratora (opcjonalnie userId), inaczej tylko wpisy danego użytkownika. */
+export function listLogs({ all = false, userId = null, category = null, before = null, limit = 100 }) {
+  const where = [], args = [];
+  if (!all) { where.push('user_id = ?'); args.push(userId); }
+  else if (userId === 0) where.push('user_id IS NULL');
+  else if (userId) { where.push('user_id = ?'); args.push(userId); }
+  if (category) { where.push('category = ?'); args.push(category); }
+  if (before) { where.push('id < ?'); args.push(before); }
+  const sql = `SELECT l.*, u.username FROM logs l LEFT JOIN users u ON u.id = l.user_id ${where.length ? 'WHERE ' + where.map((w) => 'l.' + w).join(' AND ') : ''} ORDER BY l.id DESC LIMIT ?`;
+  return db.prepare(sql).all(...args, Math.min(500, limit)).map((r) => ({ ...r, params: safeJson(r.params, {}) }));
 }

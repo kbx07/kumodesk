@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { hashPassword, verifyPassword, validUsername, validPassword } from '../server/auth.js';
+import * as totp from '../server/totp.js';
 
 test('hasła: scrypt z solą, weryfikacja, walidacja', () => {
   const h = hashPassword('correct horse');
@@ -15,6 +16,24 @@ test('hasła: scrypt z solą, weryfikacja, walidacja', () => {
   assert.equal(verifyPassword('x', 'garbage'), false);
   assert.equal(validUsername('kuba.n-1'), true); assert.equal(validUsername('ab'), false); assert.equal(validUsername('a b c'), false);
   assert.equal(validPassword('1234567'), false); assert.equal(validPassword('12345678'), true);
+});
+
+test('TOTP: wektory RFC 6238, tolerancja okna, blokada ponownego użycia', () => {
+  const sec = totp.base32Encode(Buffer.from('12345678901234567890'));
+  assert.equal(sec, 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+  assert.equal(totp.base32Decode(sec).toString(), '12345678901234567890');
+  assert.equal(totp.codeAt(sec, Math.floor(59 / 30)), '287082');            // RFC: 94287082
+  assert.equal(totp.codeAt(sec, Math.floor(1111111109 / 30)), '081804');    // RFC: 07081804
+  assert.equal(totp.codeAt(sec, Math.floor(2000000000 / 30)), '279037');    // RFC: 69279037
+  const now = 1111111109000, cur = Math.floor(now / 30000);
+  assert.equal(totp.verify(sec, '081804', { now }), cur);
+  assert.equal(totp.verify(sec, totp.codeAt(sec, cur - 1), { now }), cur - 1);   // poprzednie okno jeszcze ważne
+  assert.equal(totp.verify(sec, totp.codeAt(sec, cur - 2), { now }), null);      // starsze już nie
+  assert.equal(totp.verify(sec, '081804', { now, lastCounter: cur }), null);     // ten sam kod drugi raz
+  assert.equal(totp.verify(sec, '000000', { now }), null); assert.equal(totp.verify(sec, 'abc', { now }), null);
+  const codes = totp.newRecoveryCodes();
+  assert.equal(codes.length, 10); assert.match(codes[0], /^[0-9a-f]{4}-[0-9a-f]{4}$/);
+  assert.equal(totp.hashCode(codes[0]), totp.hashCode(codes[0].replace('-', '').toUpperCase()));
 });
 
 // Pełny przebieg na prawdziwym serwerze: pierwsze uruchomienie, logowanie, role, izolacja danych, udostępnianie, wiadomości.
@@ -38,6 +57,15 @@ test('serwer: konfiguracja, logowanie, role, izolacja portfeli, udostępnianie, 
     };
   };
   const anon = client(), alice = client(), bob = client(), carol = client();
+  // konfiguracja weryfikacji dwuetapowej: pobierz sekret, potwierdź kodem; zwraca sekret i kody zapasowe
+  const enrol = async (c) => {
+    const b1 = await c('POST', '/auth/2fa/begin', {});
+    assert.equal(b1.status, 200); assert.match(b1.body.qr, /<svg/); assert.match(b1.body.url, /^otpauth:\/\/totp\//);
+    assert.equal((await c('POST', '/auth/2fa/enable', { code: '000000' })).status, 400);
+    const e = await c('POST', '/auth/2fa/enable', { code: totp.codeAt(b1.body.secret, Math.floor(Date.now() / 30000)) });
+    assert.equal(e.status, 200); assert.equal(e.body.user.twofa.enabled, true); assert.equal(e.body.recovery.length, 10);
+    return { secret: b1.body.secret, recovery: e.body.recovery };
+  };
 
   // przed konfiguracją: API zamknięte, stan mówi „setup”
   assert.equal((await anon('GET', '/auth/state')).body.setup, true);
@@ -52,6 +80,12 @@ test('serwer: konfiguracja, logowanie, role, izolacja portfeli, udostępnianie, 
   assert.equal((await anon('POST', '/auth/setup', { username: 'mallory', password: 'mallory-pass' })).status, 409);
   assert.equal((await anon('GET', '/auth/state')).body.setup, false);
   assert.equal((await alice('GET', '/auth/state')).body.user.username, 'alice');
+  // nowe konto musi najpierw włączyć 2FA – do tego czasu API jest zamknięte
+  assert.equal((await alice('GET', '/dashboard')).status, 403);
+  assert.equal((await alice('GET', '/dashboard')).body.error, 'err.twofaRequired');
+  const aliceTotp = await enrol(alice);
+  assert.equal((await alice('GET', '/dashboard')).status, 200);
+  assert.equal((await alice('POST', '/auth/2fa/disable', { password: 'alice-password' })).status, 400); // obowiązkowej nie da się wyłączyć
 
   // złe hasło, nieistniejący login, potem poprawne logowanie
   assert.equal((await anon('POST', '/auth/login', { username: 'alice', password: 'nope-nope' })).status, 401);
@@ -63,6 +97,29 @@ test('serwer: konfiguracja, logowanie, role, izolacja portfeli, udostępnianie, 
   assert.equal((await alice('POST', '/users', { username: 'BOB', password: 'bob-password' })).status, 400); // login bez rozróżniania wielkości liter
   assert.equal((await bob('POST', '/auth/login', { username: 'bob', password: 'bob-password' })).status, 200);
   assert.equal((await carol('POST', '/auth/login', { username: 'Carol', password: 'carol-password' })).status, 200);
+  const bobTotp = await enrol(bob); await enrol(carol);
+
+  // logowanie z 2FA: samo hasło nie wystarcza; zły kod odrzucony; kod zapasowy działa raz; zapamiętane urządzenie pomija kod
+  const dev = client();
+  const step1 = await dev('POST', '/auth/login', { username: 'alice', password: 'alice-password' });
+  assert.equal(step1.body.twofa, true); assert.equal(step1.setCookie, null);
+  assert.equal((await dev('GET', '/dashboard')).status, 401);
+  assert.equal((await dev('POST', '/auth/login', { username: 'alice', password: 'alice-password', code: '123456' })).status, 401);
+  const rec = aliceTotp.recovery[0];
+  assert.equal((await dev('POST', '/auth/login', { username: 'alice', password: 'alice-password', code: rec })).status, 200);
+  await dev('POST', '/auth/logout');
+  assert.equal((await dev('POST', '/auth/login', { username: 'alice', password: 'alice-password', code: rec })).status, 401); // zużyty
+  const dev2 = client();
+  let cookies = [];
+  const raw = await fetch(base + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'alice', password: 'alice-password', code: aliceTotp.recovery[1], remember: true }) });
+  cookies = raw.headers.getSetCookie().map((x) => x.split(';')[0]);
+  assert.equal(raw.status, 200); assert.ok(cookies.some((x) => x.startsWith('kd_device=')));
+  const deviceCookie = cookies.find((x) => x.startsWith('kd_device='));
+  const again = await fetch(base + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: deviceCookie }, body: JSON.stringify({ username: 'alice', password: 'alice-password' }) });
+  assert.equal(again.status, 200); assert.equal((await again.json()).user.username, 'alice');           // bez kodu na zapamiętanym urządzeniu
+  const other = await fetch(base + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: deviceCookie }, body: JSON.stringify({ username: 'bob', password: 'bob-password' }) });
+  assert.equal((await other.json()).twofa, true);                                                       // ciasteczko alice nie działa dla boba
+  void dev2; void bobTotp;
 
   // zwykły użytkownik nie zmienia ustawień serwera ani kont, ale swoje ustawienia tak
   assert.equal((await bob('POST', '/users', { username: 'eve', password: 'eve-password' })).status, 403);
@@ -110,6 +167,17 @@ test('serwer: konfiguracja, logowanie, role, izolacja portfeli, udostępnianie, 
   assert.equal((await carol('GET', '/messages/1')).body.messages.length, 0);        // osoba trzecia nie widzi rozmowy
   assert.equal((await bob('POST', '/messages', { to: 1, body: 'Dzięki!' })).status, 201);
   assert.equal((await alice('GET', '/messages')).body[0].unread, 1);
+
+  // logi: użytkownik widzi tylko swoje wpisy, administrator wszystkie
+  const bobLogs = (await bob('GET', '/logs')).body.rows;
+  assert.ok(bobLogs.length > 0); assert.ok(bobLogs.every((r) => r.user === 'bob')); assert.ok(bobLogs.some((r) => r.code === 'auth.login'));
+  assert.equal(bobLogs[0].ip, undefined);
+  const allLogs = (await alice('GET', '/logs?limit=500')).body.rows;
+  assert.ok(allLogs.some((r) => r.user === 'bob')); assert.ok(allLogs.some((r) => r.code === 'system.start' && r.user === null));
+  assert.ok(allLogs.some((r) => r.code === 'trade.close')); assert.ok(allLogs.some((r) => r.code === 'auth.loginFailed'));
+  assert.ok((await alice('GET', '/logs?category=trade')).body.rows.every((r) => r.category === 'trade'));
+  assert.ok((await alice('GET', '/logs?user=2')).body.rows.every((r) => r.user === 'bob'));
+  assert.ok((await bob('GET', '/logs?user=1')).body.rows.every((r) => r.user === 'bob')); // filtr użytkownika nie działa dla zwykłego konta
 
   // konto: zmiana hasła wymaga obecnego; ostatniego administratora nie da się usunąć ani zdegradować
   assert.equal((await bob('PUT', '/account', { current: 'wrong-one', password: 'new-password-1' })).status, 400);
