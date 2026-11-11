@@ -732,7 +732,7 @@ function updateCard() {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const draw = (d, busy) => {
     const cmd = d.mode === 'docker' ? 'docker compose pull && docker compose up -d' : 'update';
-    box.replaceChildren(h('h3', null, T('upd.title')),
+    box.replaceChildren(...[h('h3', null, T('upd.title')),
       h('div', { class: 'kvrow' },
         h('div', null, h('span', { class: 'muted small' }, T('upd.current')), h('b', null, d.current)),
         h('div', null, h('span', { class: 'muted small' }, T('upd.latest')), h('b', null, d.latest || '–'),
@@ -743,7 +743,7 @@ function updateCard() {
         d.available && d.mode === 'self' ? h('button', { class: 'btn primary', onclick: () => start(d) }, T('upd.now', { v: d.latest })) : null),
       d.state?.error && !busy ? h('p', { class: 'err small' }, T('upd.failed') + ' ' + d.state.error) : null,
       d.available && d.mode !== 'self' ? h('p', { class: 'hint' }, T('upd.hint.' + d.mode), ' ', h('code', null, cmd)) : null,
-      h('p', { class: 'hint' }, d.checked ? T('upd.checked', { ts: fmtTs(d.checked) }) : ''));
+      d.checked ? h('p', { class: 'hint' }, T('upd.checked', { ts: fmtTs(d.checked) })) : null].filter(Boolean));
   };
   const load = (force) => api('/update' + (force ? '?check=1' : '')).then((d) => { draw(d); if (d.state?.running) follow(d); }).catch((e) => box.replaceChildren(h('h3', null, T('upd.title')), h('p', { class: 'err' }, TE(e.message))));
   // waits until the server comes back with a different version, then reloads the page

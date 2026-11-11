@@ -556,7 +556,7 @@ dialog.lightbox img { display: block; max-width: 90vw; max-height: 78vh; border-
 .seg button { background: none; border: 0; padding: 5px 10px; cursor: pointer; color: var(--ink-2); font-size: 12px; }
 .seg button + button { border-left: 1px solid var(--border); }
 .seg button.on { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
-.menurow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
+.menurow { display: grid; gap: 6px; justify-items: start; padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .fieldlike { display: grid; gap: 6px; justify-items: start; font-size: 12px; color: var(--ink-2); }
 .kvrow { display: flex; flex-wrap: wrap; gap: 28px; margin-bottom: 12px; }
 .kvrow > div { display: flex; align-items: center; gap: 8px; }
