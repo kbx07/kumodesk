@@ -110,6 +110,22 @@ const pl = [
       '**Powiadomienia** – SMTP, raport po analizie grupy, alerty o nowych setupach i o zmianie zalecenia dla pozycji.',
     ],
   ] },
+  { id: 'bell', title: 'Dzwonek z powiadomieniami', body: [
+    'Dzwonek w prawym górnym rogu zbiera te same zdarzenia, które trafiają do e-maili – działa także wtedy, gdy SMTP nie jest skonfigurowany. Czerwona liczba to nowe, nieprzeczytane powiadomienia.',
+    [
+      '**Analiza gotowa** – po automatycznej analizie każdej grupy rynków: tryb, Matrix Score i co jest do grania.',
+      '**Nowy setup, awans lub utrata setupu** – gdy instrument wchodzi do klasy A/B, awansuje albo z niej wypada.',
+      '**Zmiana reżimu lub trybu egzekucji** rynku.',
+      '**Pozycje** – zmiana zalecenia H4 (np. zacieśnij stop, zamknij), odwrócony sygnał, naruszony stop.',
+    ],
+    'Kliknięcie powiadomienia otwiera instrument. Otwarcie dzwonka oznacza powiadomienia jako przeczytane; pełna lista jest w zakładce Historia.',
+  ] },
+  { id: 'scalable', title: 'Blok Scalable i własne listy instrumentów', body: [
+    'W **Ustawienia → Instrumenty** jest kategoria **Scalable**: około 120 popularnych instrumentów dostępnych u brokera Scalable Capital – ETF-y, akcje europejskie i amerykańskie oraz kryptowaluty. Jest **domyślnie wyłączona**; włączasz ją jednym kliknięciem „Włącz wszystkie” albo pojedynczo.',
+    'To wybór najpopularniejszych instrumentów, nie pełna oferta brokera. Scalable ma tysiące akcji i ETF-ów oraz setki tysięcy instrumentów pochodnych – analizowanie ich wszystkich codziennie przekracza limity darmowego źródła danych.',
+    'Brakujące instrumenty dodasz przyciskiem **Importuj listę**: wklejasz symbole (jeden w linii, opcjonalnie z nazwą po średniku), wybierasz kategorię i grupę czasową. Każdy aktywny instrument to jedno zapytanie przy odświeżaniu, więc włączaj tylko to, co faktycznie grasz.',
+    'Kryptowaluty mają własną grupę czasową: handel trwa całą dobę, więc świeca dzienna zamyka się o północy UTC, także w weekendy.',
+  ] },
   { id: 'limits', title: 'Ograniczenia, o których warto pamiętać', body: [
     [
       'Yahoo Finance to źródło nieoficjalne: może przestać działać lub zwrócić błędne dane. Przy podejrzanych świecach porównaj z wykresem brokera.',
@@ -230,6 +246,22 @@ const en = [
       '**Notifications** – SMTP, a report after each group analysis, alerts on new setups and on changed advice for positions.',
     ],
   ] },
+  { id: 'bell', title: 'The notification bell', body: [
+    'The bell in the top right corner collects the same events that go out by e-mail – it also works when SMTP is not configured. The red number is the count of new, unread notifications.',
+    [
+      '**Analysis ready** – after the automatic analysis of each market group: mode, Matrix Score and what there is to trade.',
+      '**New setup, upgrade or lost setup** – when an instrument enters grade A/B, moves up or drops out.',
+      '**Change of market regime or execution mode**.',
+      '**Positions** – changed H4 advice (e.g. tighten stop, close), a reversed signal, a breached stop.',
+    ],
+    'Clicking a notification opens the instrument. Opening the bell marks notifications as read; the full list is on the History page.',
+  ] },
+  { id: 'scalable', title: 'The Scalable block and your own instrument lists', body: [
+    'In **Settings → Instruments** there is a **Scalable** category: about 120 popular instruments available at the broker Scalable Capital – ETFs, European and US stocks and cryptocurrencies. It is **switched off by default**; enable it with one click on “Enable all” or one instrument at a time.',
+    'It is a selection of the most popular instruments, not the broker\'s full offering. Scalable lists thousands of stocks and ETFs and hundreds of thousands of derivatives – analysing all of them daily exceeds the limits of a free data source.',
+    'Add missing instruments with **Import a list**: paste symbols (one per line, optionally with a name after a semicolon), choose a category and a time group. Every active instrument costs one request per refresh, so enable only what you actually trade.',
+    'Cryptocurrencies have their own time group: they trade around the clock, so the daily candle closes at midnight UTC, weekends included.',
+  ] },
   { id: 'limits', title: 'Limitations worth remembering', body: [
     [
       'Yahoo Finance is an unofficial source: it may stop working or return wrong data. If candles look suspicious, compare them with your broker\'s chart.',
@@ -349,6 +381,22 @@ const de = [
       '**Ichimoku & Bewertung** – die Perioden 9 / 26 / 52 und die Bewertungsschwellen; hier schalten Sie auch H4- und Session-Analyse aus.',
       '**Benachrichtigungen** – SMTP, Bericht nach jeder Gruppenanalyse, Alarme zu neuen Setups und zu geänderten Empfehlungen für Positionen.',
     ],
+  ] },
+  { id: 'bell', title: 'Die Glocke mit Benachrichtigungen', body: [
+    'Die Glocke oben rechts sammelt dieselben Ereignisse, die per E-Mail verschickt werden – sie funktioniert auch ohne konfiguriertes SMTP. Die rote Zahl zeigt neue, ungelesene Benachrichtigungen.',
+    [
+      '**Analyse fertig** – nach der automatischen Analyse jeder Marktgruppe: Modus, Matrix Score und was handelbar ist.',
+      '**Neues Setup, Aufstieg oder verlorenes Setup** – wenn ein Instrument in Klasse A/B eintritt, aufsteigt oder herausfällt.',
+      '**Wechsel des Marktregimes oder des Ausführungsmodus**.',
+      '**Positionen** – geänderte H4-Empfehlung (z. B. Stopp enger setzen, schließen), gedrehtes Signal, verletzter Stopp.',
+    ],
+    'Ein Klick auf eine Benachrichtigung öffnet das Instrument. Das Öffnen der Glocke markiert Benachrichtigungen als gelesen; die vollständige Liste steht unter Verlauf.',
+  ] },
+  { id: 'scalable', title: 'Der Scalable-Block und eigene Instrumentenlisten', body: [
+    'Unter **Einstellungen → Instrumente** gibt es die Kategorie **Scalable**: rund 120 beliebte Instrumente, die beim Broker Scalable Capital verfügbar sind – ETFs, europäische und US-Aktien sowie Kryptowährungen. Sie ist **standardmäßig ausgeschaltet**; aktivieren Sie sie mit einem Klick auf „Alle aktivieren“ oder einzeln.',
+    'Es ist eine Auswahl der beliebtesten Instrumente, nicht das gesamte Angebot des Brokers. Scalable führt Tausende Aktien und ETFs sowie Hunderttausende Derivate – alle täglich zu analysieren übersteigt die Limits einer kostenlosen Datenquelle.',
+    'Fehlende Instrumente fügen Sie über **Liste importieren** hinzu: Symbole einfügen (eines je Zeile, optional mit Namen nach einem Semikolon), Kategorie und Zeitgruppe wählen. Jedes aktive Instrument kostet eine Anfrage je Aktualisierung – aktivieren Sie nur, was Sie tatsächlich handeln.',
+    'Kryptowährungen haben eine eigene Zeitgruppe: Sie werden rund um die Uhr gehandelt, daher schließt die Tageskerze um Mitternacht UTC, auch am Wochenende.',
   ] },
   { id: 'limits', title: 'Einschränkungen, die man kennen sollte', body: [
     [

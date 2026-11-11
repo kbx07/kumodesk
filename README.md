@@ -156,6 +156,8 @@ Every group is fetched and analysed once per day after its close; as many groups
 
 Add your own groups and instruments (crypto, more stocks, commodities…) in Settings. Daylight saving time is handled by the time zone.
 
+The **Scalable** category ships switched off: about 120 popular instruments available at the broker Scalable Capital (ETFs on Xetra, European and US stocks, cryptocurrencies), each symbol verified against the default data source. It is a selection, not the broker's full universe — thousands of instruments cannot be analysed daily on a free data source. Use **Import a list** to paste your own symbols in bulk. Cryptocurrencies use their own time group that closes the daily candle at midnight UTC, seven days a week.
+
 Instruments are organised in **categories** (currencies, metals, indices, DAX stocks, S&P 500 stocks, or your own). In Settings → Instruments a whole category can be switched on or off with one click.
 Single stocks get their own grades and appear in the ranking, but the market-wide figures (structure quality, alignment, Matrix Score) are calculated from currencies, metals and indices only.
 
@@ -199,6 +201,10 @@ Note for FX on Yahoo: its daily candle rolls at midnight London time, so at 17:1
 
 **Settings → Notifications**: SMTP host, port, encryption (STARTTLS / SSL / none), credentials, sender, recipients, and a test button.
 Modes: off, alerts only, or a report after every group analysis. Alerts cover new or upgraded setups, lost setups, regime and execution-mode changes, signals turning against your logged positions, and changed H4 advice for open positions.
+
+### In-app notifications
+
+The bell in the top right corner shows the same events that are e-mailed — analysis ready for a market group, new or lost setups, regime and mode changes, changed advice for open positions — with an unread counter. It works without SMTP.
 
 ## Security
 

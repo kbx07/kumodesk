@@ -740,7 +740,7 @@ async function viewSettings() {
           table));
       }
       return h('div', null,
-        h('div', { class: 'actions', style: 'margin:0 0 12px' }, h('button', { class: 'btn primary', onclick: () => instrumentDialog(null) }, '+ ' + T('ins.add')), h('span', { class: 'hint', style: 'margin:0' }, T('ins.hint'))),
+        h('div', { class: 'actions', style: 'margin:0 0 12px' }, h('button', { class: 'btn primary', onclick: () => instrumentDialog(null) }, '+ ' + T('ins.add')), h('button', { class: 'btn', onclick: () => importDialog() }, T('ins.import')), h('span', { class: 'hint', style: 'margin:0' }, T('ins.hint'))),
         wrap);
     },
     notify() {
@@ -861,6 +861,22 @@ async function viewSettings() {
     }, T('ins.dialog.hint'));
   }
 
+  function importDialog() {
+    const f = h('form', { class: 'form' },
+      h('label', { class: 'wide' }, T('imp.text'), h('textarea', { name: 'text', rows: 9, required: true, placeholder: 'VWCE.DE;Vanguard FTSE All-World\nBTC-EUR;Bitcoin\nAAPL' })),
+      field(T('ins.category'), h('input', { type: 'text', name: 'category', list: 'catlist', required: true, maxlength: 30, value: 'scalable' })),
+      field(T('ins.class'), h('select', { name: 'class' }, classes.filter((c) => c !== 'fx').map((c) => h('option', { value: c, selected: c === 'stock' }, T('class.' + c))))),
+      field(T('ins.group'), h('select', { name: 'group_id' }, groups.map((g) => h('option', { value: g.id }, `${g.name} – ${g.close_time} ${g.timezone}`)))),
+      field(T('set.provider'), h('select', { name: 'provider' }, provOptions(s.data.provider))),
+      h('label', { class: 'inline-check' }, h('input', { type: 'checkbox', name: 'enabled', checked: true }), T('ins.active')));
+    dialog(T('ins.import'), f, async () => {
+      const fd = new FormData(f);
+      const r = await api('/instruments/import', { method: 'POST', body: { text: fd.get('text'), category: fd.get('category'), class: fd.get('class'), group_id: Number(fd.get('group_id')), provider: fd.get('provider'), enabled: fd.get('enabled') === 'on' } });
+      await loadMarket();
+      setTimeout(() => toast(T('imp.done', { added: r.added, skipped: r.skipped, invalid: r.invalid.length })), 50);
+    }, T('imp.hint'));
+  }
+
   function dialog(title, form, onSave, hint) {
     const dlg = h('dialog', null, h('h2', null, title), form, hint ? h('p', { class: 'hint' }, hint) : null);
     const errEl = h('span', { class: 'err small' });
@@ -893,6 +909,32 @@ function viewHelp() {
   return root;
 }
 
+// ---------- DZWONEK ----------
+const BELL_ICON = { ANALYSIS: '◎', NEW_SETUP: '▲', UPGRADE: '▲', SETUP_LOST: '▽', REGIME: '↻', EXEC: '↻', POSITION: '!', POSITION_H4: '!' };
+function updateBell() {
+  const n = status?.bell?.unread || 0, el = $('#bellcount');
+  el.hidden = !n; el.textContent = n > 99 ? '99+' : String(n);
+  $('#bell').title = n ? T('bell.unread', { n }) : T('bell.title');
+  $('#bell').setAttribute('aria-label', $('#bell').title);
+}
+async function toggleBell(force) {
+  const panel = $('#bellpanel');
+  const open = force ?? panel.hidden;
+  if (!open) { panel.hidden = true; return; }
+  panel.hidden = false;
+  panel.replaceChildren(h('div', { class: 'muted', style: 'padding:14px' }, T('loading')));
+  try {
+    const d = await api('/notifications');
+    panel.replaceChildren(
+      h('div', { class: 'bellhead' }, h('b', null, T('bell.title')), h('a', { href: '#/history', class: 'muted small', onclick: () => toggleBell(false) }, T('bell.all'))),
+      d.items.length ? h('div', { class: 'belllist' }, d.items.map((a) => h(a.instrument_id ? 'a' : 'div', {
+        class: `bellitem sev-${a.severity}${a.unread ? ' unread' : ''}`, href: a.instrument_id ? `#/i/${encodeURIComponent(a.instrument_id)}${a.type === 'POSITION_H4' ? '?tf=h4' : ''}` : null, onclick: () => toggleBell(false),
+      }, h('span', { class: 'bellicon' }, BELL_ICON[a.type] || '•'), h('div', null, h('div', { class: 'belltext' }, T(a.code, a.params)), h('div', { class: 'muted small' }, fmtTs(a.ts))))))
+        : h('div', { class: 'muted', style: 'padding:14px' }, T('bell.empty')));
+    if (d.items[0]) { await api('/notifications/seen', { method: 'POST', body: { id: d.items[0].id } }); if (status?.bell) status.bell.unread = 0; updateBell(); }
+  } catch (e) { panel.replaceChildren(h('div', { class: 'err', style: 'padding:14px' }, TE(e.message))); }
+}
+
 // ---------- routing / pętla ----------
 const NAV = [['#/', 'nav.dashboard'], ['#/portfolio', 'nav.portfolio'], ['#/history', 'nav.history'], ['#/settings', 'nav.settings'], ['#/help', 'nav.help']];
 let renderSeq = 0;
@@ -904,7 +946,7 @@ async function render() {
   $('#nav').replaceChildren(...NAV.filter(([href]) => uiMode === 'pro' || href !== '#/history').map(([href, key]) => h('a', { href, class: (route === href || (href === '#/' && route.startsWith('#/i/'))) ? 'active' : '' }, T(key))));
   $('#disclaimer').textContent = T('disclaimer');
   $('#lang').value = langPref;
-  updateJobInfo();
+  updateJobInfo(); updateBell();
   let node;
   try {
     if (route.startsWith('#/i/')) { const [rid, q] = route.slice(4).split('?'); const qp = new URLSearchParams(q || ''); node = await viewInstrument(decodeURIComponent(rid), qp.get('tf') === 'h4' ? 'h4' : 'd1', qp.get('view') === 'live' ? 'live' : 'analysis'); }
@@ -943,7 +985,7 @@ async function poll() {
       if (!location.hash.startsWith('#/settings') || settingsTab === 'groups' || settingsTab === 'instruments') render();
     }
     wasRunning = running;
-    updateJobInfo();
+    updateJobInfo(); updateBell();
   } catch { /* serwer chwilowo niedostępny */ }
   pollTimer = setTimeout(poll, wasRunning ? 1500 : 20000);
 }
@@ -959,6 +1001,9 @@ function setLang(pref) {
 }
 
 $('#refresh').onclick = () => startRefresh();
+$('#bell').onclick = (e) => { e.stopPropagation(); toggleBell(); };
+document.addEventListener('click', (e) => { if (!$('#bellpanel').hidden && !e.target.closest('.bellwrap')) toggleBell(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleBell(false); });
 $('#lang').onchange = (e) => setLang(e.target.value);
 window.addEventListener('hashchange', render);
 

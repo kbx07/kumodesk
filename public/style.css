@@ -279,3 +279,20 @@ dialog.ticket-dlg { width: min(520px, 94vw); }
 .bdir.short { border-color: var(--crit); background: color-mix(in srgb, var(--crit) 12%, transparent); }
 .bwhy { margin: 0; color: var(--ink-2); }
 @media (max-width: 760px) { .top-right { margin-left: 0; width: 100%; flex-wrap: wrap; } #jobinfo { display: none; } }
+
+.bellwrap { position: relative; }
+.bell { position: relative; display: grid; place-items: center; width: 36px; height: 34px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--ink-2); cursor: pointer; }
+.bell:hover { border-color: var(--accent); color: var(--ink); }
+.bellcount { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--crit); color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; border: 2px solid var(--page); }
+.bellpanel { position: absolute; right: 0; top: 42px; width: min(400px, calc(100vw - 32px)); max-height: 70vh; overflow: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 14px 40px rgba(0,0,0,.4); z-index: 40; }
+.bellhead { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 14px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); }
+.bellitem { display: grid; grid-template-columns: 26px 1fr; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--grid); }
+.bellitem:last-child { border-bottom: 0; }
+a.bellitem:hover { background: var(--surface-2); }
+.bellitem.unread { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.bellicon { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; border: 1.5px solid var(--axis); font-size: 12px; font-weight: 700; }
+.sev-HIGH .bellicon { border-color: var(--crit); } .sev-MED .bellicon { border-color: var(--warn); }
+.belltext { color: var(--ink); }
+textarea { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 9px; width: 100%; font: 13px ui-monospace, monospace; resize: vertical; }
+@media (max-width: 760px) { .bellpanel { position: fixed; right: 16px; left: 16px; top: 120px; width: auto; } }
+.bellcount[hidden] { display: none; }

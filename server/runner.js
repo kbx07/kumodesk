@@ -3,7 +3,7 @@ import * as db from './db.js';
 import { fetchInstrument, fetchInstrumentH4, fetchInstrumentH1 } from './providers/index.js';
 import { computeSessions } from './sessions.js';
 import { analyzeMarket, summarize, diffAlerts } from './analysis.js';
-import { sendReport, sendPositionsReport } from './mailer.js';
+import { sendReport, sendPositionsReport, smtpConfigured } from './mailer.js';
 import { advisePosition, closedH4, ACTION_RANK } from './positions.js';
 
 let cache = null;
@@ -71,11 +71,20 @@ export async function refresh({ groupId = null, trigger = 'manual' } = {}) {
     const prev = db.lastSnapshot();
     const alerts = diffAlerts(prev?.summary, summary, { minGrade: settings.notify.minGrade, groupId });
     db.saveSnapshot({ trigger: trigger === 'schedule' ? `schedule:${group?.name || ''}` : 'manual', group_id: groupId, matrix_score: market.matrix.score, regime: market.regime.state, exec_state: market.exec, summary });
-    if (alerts.length) db.saveAlerts(alerts.map((a) => ({ ...a, message: JSON.stringify({ code: a.code, params: a.params }) })));
+    // powiadomienie „analiza gotowa” – odpowiednik raportu e-mail po analizie grupy
+    const done = [];
+    if (trigger === 'schedule' && fetched > 0) {
+      const plays = market.ranking.map((id) => market.instruments.find((x) => x.id === id)).filter((x) => x && x.action === 'PLAY' && (groupId == null || x.group_id === groupId));
+      done.push({ type: 'ANALYSIS', severity: plays.length ? 'MED' : 'LOW', instrument_id: plays[0]?.id ?? null,
+        code: plays.length ? 'alert.analysis' : 'alert.analysisNone',
+        params: { group: group?.name || '', exec: market.exec, matrix: market.matrix.score, n: plays.length, top: plays.slice(0, 3).map((x) => `${x.id} ${x.dir}`).join(', ') } });
+    }
+    const toSave = [...done, ...alerts];
+    if (toSave.length) db.saveAlerts(toSave.map((a) => ({ ...a, message: JSON.stringify({ code: a.code, params: a.params }) })));
 
     let mail = null;
     const mode = settings.notify.mode;
-    if (trigger === 'schedule' && fetched > 0 && (mode === 'report' || (mode === 'alerts' && alerts.length))) {
+    if (trigger === 'schedule' && fetched > 0 && smtpConfigured(settings) && (mode === 'report' || (mode === 'alerts' && alerts.length))) {
       try { await sendReport({ market, alerts, group, settings, errors: job.errors }); mail = 'sent'; }
       catch (e) { mail = `error: ${e.message}`; console.error('[mail]', e.message); }
     }
@@ -130,7 +139,7 @@ export async function checkPositions({ trigger = 'manual' } = {}) {
     }
     let mail = null;
     const mode = settings.notify.positions;
-    if (trigger === 'schedule' && (mode === 'always' || (mode === 'changes' && changed.length))) {
+    if (trigger === 'schedule' && smtpConfigured(settings) && (mode === 'always' || (mode === 'changes' && changed.length))) {
       try { await sendPositionsReport({ results, changed, settings }); mail = 'sent'; }
       catch (e) { mail = `error: ${e.message}`; console.error('[mail]', e.message); }
     }

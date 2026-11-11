@@ -42,7 +42,11 @@ export function isBarClosed(barDate, group, now = new Date()) {
   const lp = localParts(group.timezone, now);
   if (barDate < lp.date) return true;
   if (barDate > lp.date) return false;
-  return lp.minutes >= (hhmmToMinutes(group.close_time) ?? 1439);
+  const close = hhmmToMinutes(group.close_time) ?? 1439;
+  // Koniec handlu 00:00 oznacza północ kończącą dzień (rynki całodobowe, np. krypto):
+  // świeca z bieżącej daty jeszcze trwa, zamknięta jest dopiero wczorajsza.
+  if (close === 0) return false;
+  return lp.minutes >= close;
 }
 
 /** Czy grupa powinna zostać teraz uruchomiona (po zamknięciu + opóźnienie, raz dziennie). */

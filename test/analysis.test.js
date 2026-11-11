@@ -106,6 +106,15 @@ test('harmonogram grup: strefy czasowe, opóźnienie, raz dziennie', () => {
   assert.equal(nextRun(g, new Date('2026-01-09T23:00:00Z')).toISOString(), '2026-01-12T22:10:00.000Z'); // piątek po zamknięciu -> poniedziałek
 });
 
+test('rynek całodobowy: koniec handlu 00:00 zamyka świecę dopiero o północy', () => {
+  const g = { id: 9, name: 'Crypto', close_time: '00:00', timezone: 'UTC', delay_min: 10, days: '1,2,3,4,5,6,7', enabled: 1, last_run_date: null };
+  assert.equal(isBarClosed('2026-01-07', g, new Date('2026-01-07T07:50:00Z')), false); // dzisiejsza jeszcze trwa
+  assert.equal(isBarClosed('2026-01-06', g, new Date('2026-01-07T00:00:30Z')), true);  // wczorajsza zamknięta
+  assert.equal(groupDue(g, new Date('2026-01-07T00:05:00Z')), false);
+  assert.equal(groupDue(g, new Date('2026-01-07T00:10:00Z')), true);
+  assert.equal(groupDue(g, new Date('2026-01-10T00:10:00Z')), true);                  // sobota też
+});
+
 test('normalizacja świec: duplikaty i weekend dołączony do poniedziałku', () => {
   const out = normalizeBars([
     { date: '2026-01-09', o: 1, h: 2, l: 0.5, c: 1.5 },

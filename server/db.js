@@ -114,7 +114,7 @@ function addColumn(table, column, ddl) {
 export const getMeta = (key) => db.prepare('SELECT value FROM meta WHERE key = ?').get(key)?.value ?? null;
 export const setMeta = (key, value) => db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, String(value));
 
-const SEED_VERSION = 2;
+const SEED_VERSION = 3;
 
 /**
  * Zasiewa dane startowe. Przy aktualizacji istniejącej bazy dokłada tylko to, czego brakuje
@@ -125,11 +125,11 @@ function seed() {
   if (version >= SEED_VERSION) return;
   const fresh = db.prepare('SELECT COUNT(*) n FROM groups').get().n === 0;
   const groups = db.prepare('SELECT * FROM groups').all();
-  const insG = db.prepare('INSERT INTO groups (name, close_time, timezone, delay_min) VALUES (?,?,?,?)');
+  const insG = db.prepare('INSERT INTO groups (name, close_time, timezone, delay_min, days) VALUES (?,?,?,?,?)');
   const gid = {};
   for (const g of DEFAULT_GROUPS) {
     const found = groups.find((x) => x.timezone === g.timezone && x.close_time === g.close_time);
-    gid[g.key] = found ? found.id : Number(insG.run(g.name, g.close_time, g.timezone, g.delay_min).lastInsertRowid);
+    gid[g.key] = found ? found.id : Number(insG.run(g.name, g.close_time, g.timezone, g.delay_min, g.days || '1,2,3,4,5').lastInsertRowid);
   }
   const existing = new Set(db.prepare('SELECT id FROM instruments').all().map((r) => r.id));
   const insI = db.prepare('INSERT INTO instruments (id, name, class, category, base, quote, group_id, symbols, sort, enabled) VALUES (?,?,?,?,?,?,?,?,?,?)');
@@ -315,4 +315,5 @@ export function saveAlerts(list) {
   for (const a of list) ins.run(ts, a.type, a.severity, a.instrument_id ?? null, a.message);
   db.exec('DELETE FROM alerts WHERE id NOT IN (SELECT id FROM alerts ORDER BY id DESC LIMIT 2000)');
 }
+export const countAlertsAfter = (id) => db.prepare('SELECT COUNT(*) n FROM alerts WHERE id > ?').get(id).n;
 export const listAlerts = (limit = 200) => db.prepare('SELECT * FROM alerts ORDER BY id DESC LIMIT ?').all(limit);

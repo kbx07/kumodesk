@@ -72,7 +72,7 @@ export function climateFit(a, climate) {
   const bucket = (c) => (BASKETS.CARRY.includes(c) ? 1 : BASKETS.SAFE.includes(c) ? -1 : 0);
   let exposure = 0; // +1 = instrument rośnie przy apetycie na ryzyko
   if (a.class === 'fx') exposure = Math.sign(bucket(a.base) - bucket(a.quote));
-  else if (a.class === 'index' || a.class === 'stock') exposure = 1;
+  else if (a.class === 'index' || a.class === 'stock' || a.class === 'crypto') exposure = 1;
   if (!exposure) return 'NA';
   const want = climate.mood === 'RISK_ON' ? 1 : -1;
   return (a.dir === 'LONG' ? 1 : -1) * exposure * want > 0 ? 'WITH' : 'AGAINST';
@@ -203,8 +203,9 @@ export function analyzeMarket({ instruments, candlesById, groupsById, positions,
   const fx = ok.filter((x) => x.class === 'fx');
   // Obraz rynku (struktura, zgodność, Matrix) liczymy z walut, metali i indeksów.
   // Pojedyncze spółki dostają własne oceny, ale nie zmieniają oceny całego rynku.
-  const hasMacro = ok.some((x) => x.class !== 'stock');
-  const macro = hasMacro ? ok.filter((x) => x.class !== 'stock') : ok;
+  const single = (x) => x.class === 'stock' || x.class === 'etf' || x.class === 'crypto';
+  const hasMacro = ok.some((x) => !single(x));
+  const macro = hasMacro ? ok.filter((x) => !single(x)) : ok;
 
   // --- siła walut ---
   const acc = {};

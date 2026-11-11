@@ -16,7 +16,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3003;
 const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 
 db.openDb(path.join(DATA_DIR, 'kumodesk.db'));
 
@@ -31,7 +31,7 @@ const wrap = (fn) => (req, res) => new Promise((resolve) => resolve(fn(req, res)
 });
 const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
 
-const CLASSES = ['fx', 'metal', 'index', 'commodity', 'crypto', 'stock', 'other'];
+const CLASSES = ['fx', 'metal', 'index', 'commodity', 'crypto', 'stock', 'etf', 'other'];
 
 function publicSettings() {
   const s = db.getSettings();
@@ -102,6 +102,7 @@ app.get('/api/status', wrap((req, res) => {
     job,
     smtpConfigured: smtpConfigured(s),
     provider: s.data.provider,
+    bell: { unread: db.countAlertsAfter(Number(db.getMeta('bellSeen') || 0)) },
     h4: { enabled: !!s.h4.enabled, last: db.getMeta('h4status'), next: s.h4.enabled ? new Date((Math.floor(now.getTime() / 14400000) + (now.getTime() % 14400000 >= (s.h4.delay_min ?? 5) * 60000 ? 1 : 0)) * 14400000 + (s.h4.delay_min ?? 5) * 60000).toISOString() : null },
     groups: db.listGroups().map((g) => ({
       id: g.id, name: g.name, close_time: g.close_time, timezone: g.timezone, enabled: !!g.enabled,
@@ -126,6 +127,20 @@ app.get('/api/history', wrap((req, res) => {
     primary: s.summary.primary, primaryDir: s.summary.grades?.[s.summary.primary]?.d ?? null,
     mood: s.summary.mood, portfolio: s.summary.portfolio,
   })));
+}));
+
+// Dzwonek: te same zdarzenia, które trafiają do e-maili.
+app.get('/api/notifications', wrap((req, res) => {
+  const seen = Number(db.getMeta('bellSeen') || 0);
+  res.json({ seen, items: db.listAlerts(40).map((a) => {
+    let msg = {}; try { msg = JSON.parse(a.message); } catch { msg = { code: 'raw', params: { text: a.message } }; }
+    return { id: a.id, ts: a.ts, type: a.type, severity: a.severity, instrument_id: a.instrument_id, unread: a.id > seen, ...msg };
+  }) });
+}));
+app.post('/api/notifications/seen', wrap((req, res) => {
+  const top = db.listAlerts(1)[0]?.id || 0;
+  db.setMeta('bellSeen', Math.min(top, Math.max(Number(req.body?.id) || top, Number(db.getMeta('bellSeen') || 0))));
+  res.json({ ok: true });
 }));
 
 app.get('/api/alerts', wrap((req, res) => {
@@ -250,6 +265,32 @@ app.put('/api/instruments/:id', wrap((req, res) => {
   const saved = db.upsertInstrument(validInstrument(req.body || {}, cur));
   invalidate();
   res.json(saved);
+}));
+// Import wielu instrumentów naraz: linie „SYMBOL;Nazwa” (symbol źródła danych).
+app.post('/api/instruments/import', wrap((req, res) => {
+  const b = req.body || {};
+  const provider = PROVIDERS[b.provider] ? b.provider : db.getSettings().data.provider;
+  const group_id = Number(b.group_id);
+  if (!db.getGroup(group_id)) throw bad('err.instGroup');
+  const cls = CLASSES.includes(b.class) ? b.class : 'stock';
+  if (cls === 'fx') throw bad('err.importFx');
+  const category = String(b.category || '').trim().slice(0, 30);
+  if (!category) throw bad('err.category');
+  const lines = String(b.text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 2000);
+  let added = 0, skipped = 0;
+  const invalid = [];
+  for (const line of lines) {
+    const [symRaw, ...rest] = line.split(/[;,\t]/);
+    const symbol = (symRaw || '').trim();
+    // symbol źródła może zawierać ^ i = (np. ^GSPC, GC=F); identyfikator w aplikacji już nie
+    const id = symbol.toUpperCase().replace(/[\^=]/g, '');
+    if (!/^[A-Za-z0-9.^=_-]{1,24}$/.test(symbol) || !/^[A-Z0-9._-]{1,20}$/.test(id)) { invalid.push(line.slice(0, 30)); continue; }
+    if (db.getInstrument(id)) { skipped++; continue; }
+    db.upsertInstrument({ id, name: rest.join(' ').trim() || symbol, class: cls, category, group_id, enabled: b.enabled !== false, symbols: { [provider]: symbol } });
+    added++;
+  }
+  invalidate();
+  res.json({ added, skipped, invalid });
 }));
 app.post('/api/categories/toggle', wrap((req, res) => {
   const { category, enabled } = req.body || {};
