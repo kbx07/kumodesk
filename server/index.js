@@ -14,13 +14,15 @@ import { sendTest, smtpConfigured } from './mailer.js';
 import * as auth from './auth.js';
 import * as totp from './totp.js';
 import QRCode from 'qrcode';
+import { vapidPublicKey, pushToUser } from './push.js';
+import { t as tr } from '../public/i18n.js';
 import { isValidTimezone, hhmmToMinutes, nextRun, localParts, isBarClosed } from './timeutil.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3003;
 const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
-const VERSION = '2.2.0';
+const VERSION = '2.3.0';
 
 db.openDb(path.join(DATA_DIR, 'kumodesk.db'));
 
@@ -206,6 +208,7 @@ app.delete('/api/users/:id', admin, wrap((req, res) => {
   if (!cur) return res.status(404).json({ error: 'err.notFound' });
   if (id === req.user.id) throw bad('err.deleteSelf');
   if (cur.role === 'admin' && db.countAdmins() <= 1) throw bad('err.lastAdmin');
+  for (const fid of db.filesOfUser(id)) fs.rmSync(path.join(FILES_DIR, String(fid)), { force: true });
   db.deleteUser(id); invalidate();
   log(req, 'admin', 'admin.userDelete', { name: cur.username });
   res.json({ ok: true });
@@ -267,10 +270,25 @@ function tradeSnapshot(userId, tradeId) {
   return { instrument_id: t.instrument_id, direction: t.direction, risk_pct: t.risk_pct, entry: t.entry, stop_initial: t.stop_initial, exit: t.exit,
     opened: t.opened, closed: t.closed, r: t.r, pnl: row?.pnl ?? null, pnlPct: row?.pnlPct ?? null, currency: s.capital.currency };
 }
+const FILES_DIR = path.join(DATA_DIR, 'files');
+/** Wspólna część wysyłki: treść, zagranie, załącznik. */
+function messageParts(req) {
+  const b = req.body || {};
+  const body = String(b.body || '').trim().slice(0, 2000);
+  const trade = b.trade_id != null ? tradeSnapshot(req.user.id, Number(b.trade_id)) : null;
+  let file_id = null;
+  if (b.file_id != null) { const f = db.getFile(b.file_id); if (!f || f.owner_id !== req.user.id) throw bad('err.fileNotFound'); file_id = f.id; }
+  if (!body && !trade && !file_id) throw bad('err.messageEmpty');
+  return { body, trade, file_id };
+}
+const pushMessage = (toId, from, body, url) => pushToUser(toId, (lang) => ({ title: tr(lang, 'push.message', { name: from }), body: body || tr(lang, 'push.attachment'), url })).catch(() => {});
+
 app.get('/api/messages', wrap((req, res) => {
   const users = Object.fromEntries(db.listUsers().map((u) => [u.id, u.username]));
-  res.json(db.threadSummaries(req.user.id).filter((t) => users[t.other]).map((t) => ({ user: { id: t.other, username: users[t.other] }, unread: t.unread, last: t.last }))
-    .sort((a, b) => b.last.id - a.last.id));
+  res.json({
+    threads: db.threadSummaries(req.user.id).filter((x) => users[x.other]).map((x) => ({ user: { id: x.other, username: users[x.other] }, unread: x.unread, last: x.last })).sort((a, b) => b.last.id - a.last.id),
+    rooms: db.listRooms(req.user.id, req.user.role === 'admin'),
+  });
 }));
 app.get('/api/messages/:userId', wrap((req, res) => {
   const other = db.getUser(Number(req.params.userId));
@@ -279,13 +297,77 @@ app.get('/api/messages/:userId', wrap((req, res) => {
   res.json({ user: { id: other.id, username: other.username }, messages: db.thread(req.user.id, other.id) });
 }));
 app.post('/api/messages', wrap((req, res) => {
-  const b = req.body || {};
-  const to = db.getUser(Number(b.to));
+  const to = db.getUser(Number(req.body?.to));
   if (!to || to.id === req.user.id) throw bad('err.recipient');
-  const body = String(b.body || '').trim().slice(0, 2000);
-  const trade = b.trade_id != null ? tradeSnapshot(req.user.id, Number(b.trade_id)) : null;
-  if (!body && !trade) throw bad('err.messageEmpty');
-  res.status(201).json({ id: db.addMessage({ from_id: req.user.id, to_id: to.id, body, trade }) });
+  const parts = messageParts(req);
+  const id = db.addMessage({ from_id: req.user.id, to_id: to.id, ...parts });
+  pushMessage(to.id, req.user.username, parts.body, `/#/messages?u=${req.user.id}`);
+  res.status(201).json({ id });
+}));
+
+// ---------- czat grupowy: grupy zakłada i obsadza administrator ----------
+function validRoom(b) {
+  const name = String(b?.name || '').trim().slice(0, 60);
+  if (!name) throw bad('err.roomName');
+  const members = Array.isArray(b?.members) ? [...new Set(b.members.map(Number).filter(Number.isInteger))].slice(0, 500) : [];
+  return { name, members };
+}
+app.post('/api/rooms', admin, wrap((req, res) => { const r = db.saveRoom({ ...validRoom(req.body), created_by: req.user.id }); log(req, 'admin', 'admin.room', { name: r.name }); res.status(201).json(r); }));
+app.put('/api/rooms/:id', admin, wrap((req, res) => {
+  if (!db.getRoom(req.params.id)) return res.status(404).json({ error: 'err.notFound' });
+  const r = db.saveRoom({ id: Number(req.params.id), ...validRoom(req.body) }); log(req, 'admin', 'admin.room', { name: r.name }); res.json(r);
+}));
+app.delete('/api/rooms/:id', admin, wrap((req, res) => { const r = db.getRoom(req.params.id); if (r) { db.deleteRoom(r.id); log(req, 'admin', 'admin.roomDelete', { name: r.name }); } res.json({ ok: true }); }));
+const memberRoom = (req) => { const r = db.getRoom(req.params.id); if (!r || !db.isMember(r.id, req.user.id)) throw Object.assign(new Error('err.notMember'), { status: 403 }); return r; };
+app.get('/api/rooms/:id/messages', wrap((req, res) => {
+  const r = memberRoom(req);
+  db.markRoomRead(r.id, req.user.id);
+  const users = Object.fromEntries(db.listUsers().map((u) => [u.id, u.username]));
+  res.json({ room: { id: r.id, name: r.name, members: db.roomMembers(r.id).map((id) => ({ id, username: users[id] })).filter((m) => m.username) },
+    messages: db.roomThread(r.id).map((m) => ({ ...m, from: users[m.from_id] || '?' })) });
+}));
+app.post('/api/rooms/:id/messages', wrap((req, res) => {
+  const r = memberRoom(req), parts = messageParts(req);
+  const id = db.addMessage({ from_id: req.user.id, room_id: r.id, ...parts });
+  for (const u of db.roomMembers(r.id)) if (u !== req.user.id) pushMessage(u, `${req.user.username} · ${r.name}`, parts.body, `/#/messages?r=${r.id}`);
+  res.status(201).json({ id });
+}));
+
+// ---------- załączniki do wiadomości (do 5 MB) ----------
+app.post('/api/files', express.raw({ type: () => true, limit: '5mb' }), wrap((req, res) => {
+  if (!Buffer.isBuffer(req.body) || !req.body.length) throw bad('err.fileEmpty');
+  let name = 'file';
+  try { name = decodeURIComponent(String(req.headers['x-filename'] || 'file')); } catch { /* zostaje nazwa domyślna */ }
+  name = name.replace(/[\\/\u0000-\u001f"<>|:*?]/g, '_').slice(-120) || 'file';
+  // typ ustalamy sami: rozpoznane obrazy pokazujemy w podglądzie, całą resztę podajemy wyłącznie do pobrania
+  const type = sniffImage(req.body) || 'application/octet-stream';
+  const id = db.addFile({ owner_id: req.user.id, name, type, size: req.body.length });
+  fs.mkdirSync(FILES_DIR, { recursive: true });
+  fs.writeFileSync(path.join(FILES_DIR, String(id)), req.body);
+  res.status(201).json({ id, name, type, size: req.body.length, image: type.startsWith('image/') });
+}));
+app.get('/api/files/:id', wrap((req, res) => {
+  const f = db.getFile(req.params.id);
+  if (!f || !db.canSeeFile(f.id, req.user.id)) return res.status(404).json({ error: 'err.notFound' });
+  res.setHeader('Content-Type', f.type); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Cache-Control', 'private, max-age=3600');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+  res.setHeader('Content-Disposition', `${f.type.startsWith('image/') ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(f.name)}`);
+  fs.createReadStream(path.join(FILES_DIR, String(f.id))).on('error', () => res.status(404).end()).pipe(res);
+}));
+
+// ---------- powiadomienia push ----------
+app.get('/api/push/key', wrap((req, res) => res.json({ key: vapidPublicKey(), devices: db.pushSubs(req.user.id).length })));
+app.post('/api/push/subscribe', wrap((req, res) => {
+  const sub = req.body?.subscription;
+  if (!sub?.endpoint || !/^https:\/\//.test(sub.endpoint) || !sub.keys?.p256dh || !sub.keys?.auth) throw bad('err.pushSub');
+  db.addPushSub({ user_id: req.user.id, endpoint: String(sub.endpoint).slice(0, 1000), p256dh: String(sub.keys.p256dh), auth: String(sub.keys.auth), lang: String(req.body.lang || 'en').slice(0, 5) });
+  res.json({ ok: true });
+}));
+app.post('/api/push/unsubscribe', wrap((req, res) => { if (req.body?.endpoint) db.removePushSub(String(req.body.endpoint)); res.json({ ok: true }); }));
+app.post('/api/push/test', wrap(async (req, res) => {
+  const n = await pushToUser(req.user.id, (lang) => ({ title: 'KumoDesk', body: tr(lang, 'push.test'), url: '/#/' }));
+  if (!n) throw bad('err.pushNone');
+  res.json({ sent: n });
 }));
 
 // ---------- rynek ----------

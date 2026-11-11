@@ -138,6 +138,16 @@ export function openDb(file) {
     );
   `);
   addColumn('trades', 'user_id', 'INTEGER');
+  // czat grupowy, załączniki, push
+  addColumn('messages', 'room_id', 'INTEGER');
+  addColumn('messages', 'file_id', 'INTEGER');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS rooms (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_by INTEGER, created TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS room_members (room_id INTEGER NOT NULL, user_id INTEGER NOT NULL, last_read INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (room_id, user_id));
+    CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL, created TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS push_subs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL, lang TEXT, created TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS messages_room ON messages (room_id, id);
+  `);
   // weryfikacja dwuetapowa
   addColumn('users', 'totp_secret', 'TEXT');
   addColumn('users', 'totp_pending', 'TEXT');
@@ -457,6 +467,9 @@ export function deleteUser(id) {
   db.prepare('DELETE FROM trusted_devices WHERE user_id = ?').run(id);
   db.prepare('DELETE FROM portfolio_shares WHERE owner_id = ? OR viewer_id = ?').run(id, id);
   db.prepare('DELETE FROM messages WHERE from_id = ? OR to_id = ?').run(id, id);
+  db.prepare('DELETE FROM room_members WHERE user_id = ?').run(id);
+  db.prepare('DELETE FROM push_subs WHERE user_id = ?').run(id);
+  db.prepare('DELETE FROM files WHERE owner_id = ?').run(id);
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
 }
 export const getBellSeen = (userId) => db.prepare('SELECT bell_seen FROM users WHERE id = ?').get(userId)?.bell_seen || 0;
@@ -488,20 +501,85 @@ export function setShares(ownerId, viewerIds) {
 }
 
 // ---------- wiadomości ----------
-const parseMsg = (m) => ({ ...m, trade: m.trade ? safeJson(m.trade, null) : null });
-export function addMessage({ from_id, to_id, body, trade }) {
-  return Number(db.prepare('INSERT INTO messages (from_id, to_id, ts, body, trade) VALUES (?,?,?,?,?)')
-    .run(from_id, to_id, new Date().toISOString(), body || '', trade ? JSON.stringify(trade) : null).lastInsertRowid);
+const parseMsg = (m) => {
+  if (!m) return m;
+  const out = { ...m, trade: m.trade ? safeJson(m.trade, null) : null, file: null };
+  if (m.file_id) { const f = db.prepare('SELECT id, name, type, size FROM files WHERE id = ?').get(m.file_id); if (f) out.file = { ...f, image: f.type.startsWith('image/') }; }
+  return out;
+};
+export function addMessage({ from_id, to_id = 0, room_id = null, body, trade, file_id = null }) {
+  return Number(db.prepare('INSERT INTO messages (from_id, to_id, room_id, ts, body, trade, file_id) VALUES (?,?,?,?,?,?,?)')
+    .run(from_id, to_id, room_id, new Date().toISOString(), body || '', trade ? JSON.stringify(trade) : null, file_id).lastInsertRowid);
 }
-export const unreadMessages = (userId) => db.prepare('SELECT COUNT(*) n FROM messages WHERE to_id = ? AND read_at IS NULL').get(userId).n;
-export const thread = (a, b) => db.prepare('SELECT * FROM messages WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?) ORDER BY id DESC LIMIT 200').all(a, b, b, a).reverse().map(parseMsg);
-export const markThreadRead = (me, other) => db.prepare('UPDATE messages SET read_at = ? WHERE to_id = ? AND from_id = ? AND read_at IS NULL').run(new Date().toISOString(), me, other);
+export const unreadDirect = (userId) => db.prepare('SELECT COUNT(*) n FROM messages WHERE to_id = ? AND room_id IS NULL AND read_at IS NULL').get(userId).n;
+export const unreadRooms = (userId) => db.prepare(`SELECT COUNT(*) n FROM messages m JOIN room_members rm ON rm.room_id = m.room_id
+  WHERE rm.user_id = ? AND m.id > rm.last_read AND m.from_id != ?`).get(userId, userId).n;
+export const unreadMessages = (userId) => unreadDirect(userId) + unreadRooms(userId);
+export const thread = (a, b) => db.prepare('SELECT * FROM messages WHERE room_id IS NULL AND ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)) ORDER BY id DESC LIMIT 200').all(a, b, b, a).reverse().map(parseMsg);
+export const markThreadRead = (me, other) => db.prepare('UPDATE messages SET read_at = ? WHERE room_id IS NULL AND to_id = ? AND from_id = ? AND read_at IS NULL').run(new Date().toISOString(), me, other);
 export function threadSummaries(me) {
   const rows = db.prepare(`SELECT CASE WHEN from_id = ? THEN to_id ELSE from_id END other, MAX(id) last_id,
     SUM(CASE WHEN to_id = ? AND read_at IS NULL THEN 1 ELSE 0 END) unread
-    FROM messages WHERE from_id = ? OR to_id = ? GROUP BY other`).all(me, me, me, me);
+    FROM messages WHERE room_id IS NULL AND (from_id = ? OR to_id = ?) GROUP BY other`).all(me, me, me, me);
   return rows.map((r) => ({ other: r.other, unread: r.unread, last: parseMsg(db.prepare('SELECT * FROM messages WHERE id = ?').get(r.last_id)) }));
 }
+
+// ---------- czat grupowy ----------
+export const getRoom = (id) => db.prepare('SELECT * FROM rooms WHERE id = ?').get(Number(id)) || null;
+export const roomMembers = (roomId) => db.prepare('SELECT user_id FROM room_members WHERE room_id = ?').all(roomId).map((r) => r.user_id);
+export const isMember = (roomId, userId) => !!db.prepare('SELECT 1 FROM room_members WHERE room_id = ? AND user_id = ?').get(roomId, userId);
+export function saveRoom({ id = null, name, members, created_by = null }) {
+  db.exec('BEGIN');
+  try {
+    if (id) db.prepare('UPDATE rooms SET name = ? WHERE id = ?').run(name, id);
+    else id = Number(db.prepare('INSERT INTO rooms (name, created_by, created) VALUES (?,?,?)').run(name, created_by, new Date().toISOString()).lastInsertRowid);
+    const keep = new Set(members);
+    for (const u of roomMembers(id)) if (!keep.has(u)) db.prepare('DELETE FROM room_members WHERE room_id = ? AND user_id = ?').run(id, u);
+    const ins = db.prepare('INSERT OR IGNORE INTO room_members (room_id, user_id, last_read) VALUES (?,?,(SELECT COALESCE(MAX(id),0) FROM messages))');
+    for (const u of keep) if (getUser(u)) ins.run(id, u);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  return getRoom(id);
+}
+export function deleteRoom(id) {
+  db.prepare('DELETE FROM messages WHERE room_id = ?').run(id);
+  db.prepare('DELETE FROM room_members WHERE room_id = ?').run(id);
+  db.prepare('DELETE FROM rooms WHERE id = ?').run(id);
+}
+/** Pokoje użytkownika (administrator z all=true widzi wszystkie) z ostatnią wiadomością i liczbą nieprzeczytanych. */
+export function listRooms(userId, all = false) {
+  const rooms = all ? db.prepare('SELECT * FROM rooms ORDER BY name').all()
+    : db.prepare('SELECT r.* FROM rooms r JOIN room_members m ON m.room_id = r.id WHERE m.user_id = ? ORDER BY r.name').all(userId);
+  return rooms.map((r) => {
+    const mem = db.prepare('SELECT last_read FROM room_members WHERE room_id = ? AND user_id = ?').get(r.id, userId);
+    return { id: r.id, name: r.name, members: roomMembers(r.id), member: !!mem,
+      unread: mem ? db.prepare('SELECT COUNT(*) n FROM messages WHERE room_id = ? AND id > ? AND from_id != ?').get(r.id, mem.last_read, userId).n : 0,
+      last: parseMsg(db.prepare('SELECT * FROM messages WHERE room_id = ? ORDER BY id DESC LIMIT 1').get(r.id)) || null };
+  });
+}
+export const roomThread = (roomId) => db.prepare('SELECT * FROM messages WHERE room_id = ? ORDER BY id DESC LIMIT 300').all(roomId).reverse().map(parseMsg);
+export const markRoomRead = (roomId, userId) => db.prepare('UPDATE room_members SET last_read = (SELECT COALESCE(MAX(id),0) FROM messages WHERE room_id = ?) WHERE room_id = ? AND user_id = ?').run(roomId, roomId, userId);
+
+// ---------- załączniki ----------
+export const addFile = ({ owner_id, name, type, size }) => Number(db.prepare('INSERT INTO files (owner_id, name, type, size, created) VALUES (?,?,?,?,?)').run(owner_id, name, type, size, new Date().toISOString()).lastInsertRowid);
+export const getFile = (id) => db.prepare('SELECT * FROM files WHERE id = ?').get(Number(id)) || null;
+/** Plik widzi wgrywający oraz uczestnicy rozmowy, w której go wysłano. */
+export function canSeeFile(fileId, userId) {
+  const f = getFile(fileId);
+  if (!f) return false;
+  if (f.owner_id === userId) return true;
+  return !!db.prepare(`SELECT 1 FROM messages m LEFT JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = ?
+    WHERE m.file_id = ? AND ((m.room_id IS NULL AND (m.to_id = ? OR m.from_id = ?)) OR rm.user_id IS NOT NULL) LIMIT 1`).get(userId, fileId, userId, userId);
+}
+export const filesOfUser = (userId) => db.prepare('SELECT id FROM files WHERE owner_id = ?').all(userId).map((r) => r.id);
+
+// ---------- powiadomienia push ----------
+export function addPushSub({ user_id, endpoint, p256dh, auth, lang }) {
+  db.prepare(`INSERT INTO push_subs (user_id, endpoint, p256dh, auth, lang, created) VALUES (?,?,?,?,?,?)
+    ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth, lang = excluded.lang`).run(user_id, endpoint, p256dh, auth, lang || 'en', new Date().toISOString());
+}
+export const removePushSub = (endpoint) => db.prepare('DELETE FROM push_subs WHERE endpoint = ?').run(endpoint);
+export const pushSubs = (userId = null) => (userId == null ? db.prepare('SELECT * FROM push_subs').all() : db.prepare('SELECT * FROM push_subs WHERE user_id = ?').all(userId));
 
 // ---------- weryfikacja dwuetapowa ----------
 export const setTotpPending = (id, secret) => db.prepare('UPDATE users SET totp_pending = ? WHERE id = ?').run(secret, id);

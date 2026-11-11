@@ -505,3 +505,19 @@ body.locked .decor .fig { opacity: .85; } body.locked .bit { opacity: .8; }
 .codes code { font: 14px ui-monospace, monospace; background: var(--surface-2); padding: 6px 10px; border-radius: 4px; text-align: center; user-select: all; }
 .logtable td { padding: 5px 8px; } .logtable tr:hover td { background: var(--surface-2); }
 .card h3 select { height: 28px; font-weight: 400; }
+
+/* czat grupowy i załączniki */
+.msguser { display: flex; gap: 8px; align-items: center; }
+.msguserlink { display: flex; gap: 10px; align-items: center; flex: 1; min-width: 0; }
+.avatar.room { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--border); border-radius: 6px; }
+.msgform { grid-template-columns: 1fr auto; }
+.msgbtns { display: flex; gap: 6px; }
+.pendingfile { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; background: var(--surface-2); border-radius: 6px; padding: 6px 10px; }
+.pendingfile[hidden] { display: none; }
+.thumb { padding: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface-2); cursor: zoom-in; display: block; }
+.thumb img { display: block; max-width: 280px; max-height: 200px; object-fit: cover; }
+.filechip { display: flex; gap: 8px; align-items: center; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; max-width: 320px; }
+.filechip:hover { border-color: var(--accent); }
+.fileicon { flex: none; }
+dialog.lightbox { width: auto; max-width: 94vw; padding: 12px; }
+dialog.lightbox img { display: block; max-width: 90vw; max-height: 78vh; border-radius: 6px; margin: 0 auto; }

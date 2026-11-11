@@ -5,6 +5,7 @@ import { computeSessions } from './sessions.js';
 import { analyzeMarket, summarize, diffAlerts } from './analysis.js';
 import { sendReport, sendPositionsReport, smtpConfigured, smtpReady } from './mailer.js';
 import { advisePosition, closedH4, ACTION_RANK } from './positions.js';
+import { pushAlerts } from './push.js';
 
 // Obraz rynku zależy od portfela i limitów użytkownika, więc pamięć podręczna jest osobna dla każdego.
 // Klucz 0 = sam rynek, bez pozycji (migawki, raporty grup, alerty wspólne).
@@ -86,6 +87,7 @@ export async function refresh({ groupId = null, trigger = 'manual' } = {}) {
     }
     const toSave = [...done, ...alerts];
     if (toSave.length) db.saveAlerts(toSave.map((a) => ({ ...a, message: JSON.stringify({ code: a.code, params: a.params }) })));
+    if (trigger === 'schedule') pushAlerts(toSave);
 
     let mail = null;
     const mode = settings.notify.mode;
@@ -141,6 +143,7 @@ export async function checkPositions({ trigger = 'manual', userId = null } = {})
         if (advice.action !== 'NO_DATA' && prev !== advice.action && !(prev == null && advice.action === 'HOLD')) changed.push(row);
       }
       all.push(...results); allChanged.push(...changed);
+      if (changed.length && trigger === 'schedule') pushAlerts(changed.map((c) => ({ user_id: owner, instrument_id: c.instrument_id, code: 'alert.h4', params: { id: c.instrument_id, dir: c.direction, action: c.advice.action, reason: c.advice.reason } })));
       if (changed.length) {
         db.saveAlerts(changed.map((c) => ({
           type: 'POSITION_H4', severity: ACTION_RANK[c.advice.action] >= 4 ? 'HIGH' : ACTION_RANK[c.advice.action] >= 2 ? 'MED' : 'LOW',

@@ -49,12 +49,14 @@ test('serwer: konfiguracja, logowanie, role, izolacja portfeli, udostępnianie, 
 
   const client = () => {
     let cookie = '';
-    return async (method, url, body) => {
+    const call = async (method, url, body) => {
       const res = await fetch(base + url, { method, headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cookie ? { Cookie: cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
       const sc = res.headers.get('set-cookie');
       if (sc) cookie = sc.split(';')[0];
       return { status: res.status, body: await res.json().catch(() => ({})), setCookie: sc };
     };
+    call.cookie = () => cookie;
+    return call;
   };
   const anon = client(), alice = client(), bob = client(), carol = client();
   // konfiguracja weryfikacji dwuetapowej: pobierz sekret, potwierdź kodem; zwraca sekret i kody zapasowe
@@ -166,7 +168,53 @@ test('serwer: konfiguracja, logowanie, role, izolacja portfeli, udostępnianie, 
   assert.equal((await bob('GET', '/status')).body.mail.unread, 0);                   // otwarcie wątku oznacza jako przeczytane
   assert.equal((await carol('GET', '/messages/1')).body.messages.length, 0);        // osoba trzecia nie widzi rozmowy
   assert.equal((await bob('POST', '/messages', { to: 1, body: 'Dzięki!' })).status, 201);
-  assert.equal((await alice('GET', '/messages')).body[0].unread, 1);
+  assert.equal((await alice('GET', '/messages')).body.threads[0].unread, 1);
+
+  // czat grupowy: grupy zakłada administrator, czytają i piszą tylko członkowie
+  assert.equal((await bob('POST', '/rooms', { name: 'x', members: [2] })).status, 403);
+  const room = await alice('POST', '/rooms', { name: 'Ichimoku team', members: [1, 2] });
+  assert.equal(room.status, 201);
+  assert.equal((await bob('POST', `/rooms/${room.body.id}/messages`, { body: 'Cześć grupo' })).status, 201);
+  assert.equal((await carol('GET', `/rooms/${room.body.id}/messages`)).status, 403);
+  assert.equal((await carol('POST', `/rooms/${room.body.id}/messages`, { body: 'wchodzę' })).status, 403);
+  assert.equal((await alice('GET', '/status')).body.mail.unread, 2);                 // 1 prywatna + 1 w grupie
+  const rt = await alice('GET', `/rooms/${room.body.id}/messages`);
+  assert.equal(rt.body.messages[0].from, 'bob'); assert.equal(rt.body.room.members.length, 2);
+  assert.equal((await alice('GET', '/status')).body.mail.unread, 1);
+  assert.equal((await bob('GET', '/messages')).body.rooms.length, 1);
+  assert.equal((await carol('GET', '/messages')).body.rooms.filter((r) => r.member).length, 0);
+
+  // załączniki: obraz rozpoznany po treści, inne pliki tylko do pobrania, dostęp wyłącznie dla uczestników
+  const up = async (c, bytes, name) => { const st = await c('GET', '/auth/state'); void st; return c; };
+  void up;
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const rawUpload = async (cookieClient, body, name) => {
+    // klient testowy wysyła JSON, więc plik wgrywamy bezpośrednio z ciasteczkiem sesji
+    const probe = await cookieClient('GET', '/auth/state'); void probe;
+    return fetch(base + '/files', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(name), Cookie: cookieClient.cookie() }, body });
+  };
+  const f1 = await rawUpload(bob, png, 'wykres ąę.png'); const f1b = await f1.json();
+  assert.equal(f1.status, 201); assert.equal(f1b.type, 'image/png'); assert.equal(f1b.image, true); assert.equal(f1b.name, 'wykres ąę.png');
+  const f2 = await (await rawUpload(bob, Buffer.from('<script>alert(1)</script>'), 'evil.html')).json();
+  assert.equal(f2.type, 'application/octet-stream'); assert.equal(f2.image, false);
+  assert.equal((await rawUpload(bob, Buffer.alloc(5 * 1024 * 1024 + 10), 'big.bin')).status, 413);
+  assert.equal((await alice('POST', '/messages', { to: 2, file_id: f1b.id })).status, 400);              // cudzy plik
+  assert.equal((await bob('POST', '/messages', { to: 1, file_id: f1b.id })).status, 201);
+  assert.equal((await bob('POST', `/rooms/${room.body.id}/messages`, { body: 'plik', file_id: f2.id })).status, 201);
+  const getFile = (c, id) => fetch(base + '/files/' + id, { headers: { Cookie: c.cookie() } });
+  const g1 = await getFile(alice, f1b.id);
+  assert.equal(g1.status, 200); assert.equal(g1.headers.get('content-type'), 'image/png'); assert.match(g1.headers.get('content-disposition'), /^inline/);
+  assert.equal(Buffer.from(await g1.arrayBuffer()).equals(png), true);
+  const g2 = await getFile(alice, f2.id);
+  assert.match(g2.headers.get('content-disposition'), /^attachment/); assert.equal(g2.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal((await getFile(carol, f1b.id)).status, 404);                                               // osoba spoza rozmowy
+  assert.equal((await getFile(carol, f2.id)).status, 404);                                                // i spoza grupy
+  assert.equal((await fetch(base + '/files/' + f1b.id)).status, 401);
+
+  // push: klucz publiczny i subskrypcja (sama wysyłka wymaga usługi push przeglądarki)
+  assert.match((await bob('GET', '/push/key')).body.key, /^[A-Za-z0-9_-]{80,}$/);
+  assert.equal((await bob('POST', '/push/subscribe', { subscription: { endpoint: 'http://insecure', keys: { p256dh: 'a', auth: 'b' } } })).status, 400);
+  assert.equal((await bob('POST', '/push/test')).status, 400);
 
   // logi: użytkownik widzi tylko swoje wpisy, administrator wszystkie
   const bobLogs = (await bob('GET', '/logs')).body.rows;

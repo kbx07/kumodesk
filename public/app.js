@@ -652,6 +652,38 @@ async function viewHistory() {
 
 // ---------- USTAWIENIA ----------
 let settingsTab = 'general';
+/** Powiadomienia push na tym urządzeniu (domyślnie wyłączone; włączenie pyta przeglądarkę o zgodę). */
+const pushSupported = () => window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const b64ToBytes = (s) => Uint8Array.from(atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+function pushCard() {
+  const card = h('div', { class: 'card section-gap' }, h('h3', null, T('push.title')));
+  if (!pushSupported()) { card.append(h('p', { class: 'muted' }, T(window.isSecureContext ? 'push.unsupported' : 'push.needHttps'))); return card; }
+  const state = h('span', { class: 'badge' }), toggle = h('input', { type: 'checkbox', style: 'width:auto;height:auto' }), testBtn = h('button', { class: 'btn', hidden: true }, T('push.sendTest'));
+  const setState = (on) => { toggle.checked = on; testBtn.hidden = !on; state.replaceChildren(h('span', { class: `dot ${on ? 'good' : ''}` }), T(on ? 'twofa.on' : 'twofa.off')); };
+  const getSub = async () => { const reg = await navigator.serviceWorker.getRegistration('/'); return reg ? reg.pushManager.getSubscription() : null; };
+  getSub().then((sub) => setState(!!sub)).catch(() => setState(false));
+  toggle.onchange = async () => {
+    try {
+      if (toggle.checked) {
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') { setState(false); toast(T('push.denied'), true); return; }
+        const reg = await navigator.serviceWorker.register('/sw.js'); await navigator.serviceWorker.ready;
+        const { key } = await api('/push/key');
+        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
+        await api('/push/subscribe', { method: 'POST', body: { subscription: sub.toJSON(), lang } });
+        setState(true); toast(T('push.enabled'));
+      } else {
+        const sub = await getSub();
+        if (sub) { await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } }); await sub.unsubscribe(); }
+        setState(false);
+      }
+    } catch (e) { setState(false); toast(T('push.failed') + ' ' + (e.message || ''), true); }
+  };
+  testBtn.onclick = async () => { try { await api('/push/test', { method: 'POST' }); toast(T('push.testSent')); } catch (e) { toast(TE(e.message), true); } };
+  card.querySelector('h3').append(state);
+  card.append(h('label', { class: 'inline-check' }, toggle, h('b', null, T('push.toggle'))), h('p', { class: 'hint' }, T('push.hint')), h('div', { class: 'actions', style: 'margin-top:8px' }, testBtn));
+  return card;
+}
 /** Sekcja 2FA w „Moje konto”. */
 function twofaCard() {
   const tf = me.twofa || {};
@@ -728,6 +760,7 @@ async function viewSettings() {
         h('div', { class: 'card' }, h('h3', null, T('set.tab.general')), f, h('p', { class: 'hint' }, `KumoDesk ${status?.version || ''}`)),
         h('div', { class: 'card section-gap' }, h('h3', null, T('acc.title'), h('span', { class: 'muted small' }, T('user.role.' + me.role))), acc),
         twofaCard(),
+        pushCard(),
         look ? h('div', { class: 'card section-gap' }, h('h3', null, T('look.title')), look, h('p', { class: 'hint' }, T('look.hint'))) : '');
     },
     logs() {
@@ -1168,31 +1201,79 @@ async function shareTradeDialog(tr) {
     toast(T('share.sent', { name: to.selectedOptions[0].textContent }));
   }, { saveLabel: T('share.send'), cls: 'ticket-dlg' });
 }
-async function viewMessages(otherId) {
+const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' kB');
+/** Załącznik w wiadomości: obraz jako miniatura z podglądem w oknie, inne pliki do pobrania. */
+function fileView(f) {
+  const url = `/api/files/${f.id}`;
+  if (f.image) return h('button', { type: 'button', class: 'thumb', title: f.name, onclick: () => {
+    const dlg = h('dialog', { class: 'lightbox' }, h('img', { src: url, alt: f.name }), h('div', { class: 'actions' }, h('span', { class: 'muted small grow' }, `${f.name} · ${fmtSize(f.size)}`),
+      h('a', { class: 'btn', href: url, download: f.name }, T('file.download')), h('button', { class: 'btn primary', onclick: () => dlg.close() }, T('close'))));
+    dlg.addEventListener('close', () => dlg.remove()); dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); }); document.body.append(dlg); dlg.showModal();
+  } }, h('img', { src: url, alt: f.name, loading: 'lazy' }));
+  return h('a', { class: 'filechip', href: url, download: f.name }, h('span', { class: 'fileicon' }, '⬇'), h('span', { class: 'grow clip' }, f.name), h('span', { class: 'muted small' }, fmtSize(f.size)));
+}
+/** Wgrywa plik (do 5 MB) i zwraca jego opis. */
+async function uploadFile(fl) {
+  if (fl.size > 5 * 1024 * 1024) throw new Error('err.fileTooBig');
+  const r = await fetch('/api/files', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(fl.name) }, body: fl });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || (r.status === 413 ? 'err.fileTooBig' : `HTTP ${r.status}`));
+  return d;
+}
+async function viewMessages(target) {
   const root = h('div', null, h('div', { class: 'muted' }, T('loading')));
-  const [threads, users] = await Promise.all([api('/messages'), otherUsers()]);
+  const [{ threads, rooms }, users] = await Promise.all([api('/messages'), otherUsers()]);
   const byUser = Object.fromEntries(threads.map((x) => [x.user.id, x]));
   const order = [...threads.map((x) => x.user), ...users.filter((u) => !byUser[u.id]).map((u) => ({ id: u.id, username: u.username }))];
-  if (!otherId && order.length) otherId = order[0].id;
-  const list = h('div', { class: 'card msglist' }, h('h3', null, T('msg.title')),
-    order.length ? order.map((u) => h('a', { class: 'msguser' + (u.id === otherId ? ' on' : ''), href: `#/messages?u=${u.id}` },
-      h('span', { class: 'avatar' }, u.username.slice(0, 1).toUpperCase()), h('span', { class: 'grow' }, h('b', null, u.username),
-        h('div', { class: 'muted small clip' }, byUser[u.id] ? (byUser[u.id].last.body || (byUser[u.id].last.trade ? T('msg.trade') : '')) : T('msg.new'))),
-      byUser[u.id]?.unread && u.id !== otherId ? h('span', { class: 'bellcount', style: 'position:static' }, byUser[u.id].unread) : null))
+  const myRooms = rooms.filter((r) => r.member);
+  if (!target.u && !target.r) { if (myRooms.length) target = { r: myRooms[0].id }; else if (order.length) target = { u: order[0].id }; }
+  const preview = (last) => (last ? (last.body || (last.trade ? T('msg.trade') : last.file ? '📎 ' + last.file.name : '')) : T('msg.new'));
+  const roomDialog = (room) => {
+    const picked = new Set(room ? room.members : [me.id]);
+    const all = [{ id: me.id, username: me.username }, ...users];
+    const f = h('form', { class: 'form' }, h('label', { class: 'wide' }, T('room.name'), h('input', { type: 'text', name: 'name', value: room?.name || '', required: true, maxlength: 60 })),
+      h('div', { class: 'wide' }, h('div', { class: 'k muted small', style: 'margin-bottom:6px' }, T('room.members')), h('div', { class: 'chips' }, all.map((u) => { const c = h('button', { type: 'button', class: 'chip' + (picked.has(u.id) ? ' on' : ''), onclick: () => { picked.has(u.id) ? picked.delete(u.id) : picked.add(u.id); c.classList.toggle('on'); } }, u.username); return c; }))));
+    openDialog(room ? T('room.edit') : T('room.add'), f, async () => { await api(room ? `/rooms/${room.id}` : '/rooms', { method: room ? 'PUT' : 'POST', body: { name: f.elements.name.value, members: [...picked] } }); render(); });
+  };
+  const list = h('div', { class: 'card msglist' },
+    h('h3', null, T('room.title'), isAdmin() ? h('button', { class: 'btn sm', onclick: () => roomDialog(null) }, '+ ' + T('room.add')) : null),
+    rooms.length ? rooms.map((r) => h('div', { class: 'msguser' + (target.r === r.id ? ' on' : '') },
+      h('a', { class: 'msguserlink', href: r.member ? `#/messages?r=${r.id}` : null }, h('span', { class: 'avatar room' }, '#'), h('span', { class: 'grow' }, h('b', null, r.name), h('div', { class: 'muted small clip' }, r.member ? preview(r.last) : T('room.notMember', { n: r.members.length })))),
+      r.unread && target.r !== r.id ? h('span', { class: 'bellcount', style: 'position:static' }, r.unread) : null,
+      isAdmin() ? [h('button', { class: 'btn sm', title: T('edit'), onclick: () => roomDialog(r) }, '✎'), h('button', { class: 'btn sm danger', title: T('delete'), onclick: async () => { if (!confirm(T('room.confirmDelete', { name: r.name }))) return; await api(`/rooms/${r.id}`, { method: 'DELETE' }); location.hash = '#/messages'; render(); } }, '✕')] : null))
+      : h('p', { class: 'muted small' }, T(isAdmin() ? 'room.none.admin' : 'room.none')),
+    h('h3', { style: 'margin-top:16px' }, T('msg.title')),
+    order.length ? order.map((u) => h('a', { class: 'msguser' + (u.id === target.u ? ' on' : ''), href: `#/messages?u=${u.id}` },
+      h('span', { class: 'avatar' }, u.username.slice(0, 1).toUpperCase()), h('span', { class: 'grow' }, h('b', null, u.username), h('div', { class: 'muted small clip' }, preview(byUser[u.id]?.last))),
+      byUser[u.id]?.unread && u.id !== target.u ? h('span', { class: 'bellcount', style: 'position:static' }, byUser[u.id].unread) : null))
       : h('p', { class: 'muted' }, T('share.noUsers')));
   const panel = h('div', { class: 'card msgpanel' });
-  if (otherId) {
-    const d = await api(`/messages/${otherId}`);
+  if (target.u || target.r) {
+    const base = target.r ? `/rooms/${target.r}/messages` : `/messages/${target.u}`;
+    const d = await api(base);
+    const title = target.r ? d.room.name : d.user.username;
+    const who = (m) => (m.from_id === me.id ? T('msg.you') : target.r ? m.from : d.user.username);
     const box = h('div', { class: 'msgs' }, d.messages.length ? d.messages.map((m) => h('div', { class: 'msg' + (m.from_id === me.id ? ' mine' : '') },
-      m.trade ? tradeCard(m.trade) : null, m.body ? h('div', { class: 'msgbody' }, m.body) : null,
-      h('div', { class: 'muted small' }, `${m.from_id === me.id ? T('msg.you') : d.user.username} · ${fmtTs(m.ts)}`))) : h('p', { class: 'muted' }, T('msg.empty')));
-    const input = h('textarea', { rows: 2, maxlength: 2000, placeholder: T('msg.placeholder'), required: true, style: 'font:inherit' });
-    const form = h('form', { class: 'msgform' }, input, h('button', { class: 'btn primary' }, T('msg.send')));
-    form.onsubmit = async (e) => { e.preventDefault(); try { await api('/messages', { method: 'POST', body: { to: otherId, body: input.value } }); render(); } catch (ex) { toast(TE(ex.message), true); } };
+      m.trade ? tradeCard(m.trade) : null, m.file ? fileView(m.file) : null, m.body ? h('div', { class: 'msgbody' }, m.body) : null,
+      h('div', { class: 'muted small' }, `${who(m)} · ${fmtTs(m.ts)}`))) : h('p', { class: 'muted' }, T('msg.empty')));
+    let pending = null;
+    const input = h('textarea', { rows: 2, maxlength: 2000, placeholder: T('msg.placeholder'), style: 'font:inherit' });
+    const attach = h('div', { class: 'pendingfile', hidden: true });
+    const fileInput = h('input', { type: 'file', hidden: true, onchange: async (e) => {
+      const fl = e.target.files[0]; e.target.value = ''; if (!fl) return;
+      try { pending = await uploadFile(fl); attach.hidden = false; attach.replaceChildren(h('span', { class: 'fileicon' }, '📎'), h('span', { class: 'grow clip' }, `${pending.name} · ${fmtSize(pending.size)}`), h('button', { type: 'button', class: 'btn sm', onclick: () => { pending = null; attach.hidden = true; } }, '✕')); }
+      catch (ex) { toast(TE(ex.message), true); }
+    } });
+    const form = h('form', { class: 'msgform' }, attach, input, h('div', { class: 'msgbtns' },
+      h('button', { type: 'button', class: 'btn', title: T('file.attach'), 'aria-label': T('file.attach'), onclick: () => fileInput.click() }, '📎'), h('button', { class: 'btn primary' }, T('msg.send'))), fileInput);
+    form.onsubmit = async (e) => {
+      e.preventDefault(); if (!input.value.trim() && !pending) return;
+      try { await api(target.r ? base : '/messages', { method: 'POST', body: { ...(target.r ? {} : { to: target.u }), body: input.value, ...(pending ? { file_id: pending.id } : {}) } }); render(); } catch (ex) { toast(TE(ex.message), true); }
+    };
     input.onkeydown = (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) form.requestSubmit(); };
-    panel.append(h('h3', null, d.user.username), box, form);
+    panel.append(h('h3', null, title, target.r ? h('span', { class: 'muted small' }, d.room.members.map((m) => m.username).join(', ')) : null), box, form);
     setTimeout(() => { box.scrollTop = box.scrollHeight; }, 0);
-    if (status?.mail) { status.mail.unread = Math.max(0, status.mail.unread - (byUser[otherId]?.unread || 0)); updateBell(); }
+    api('/status').then((st) => { status = st; updateBell(); }).catch(() => {});
   } else panel.append(h('p', { class: 'muted' }, T('msg.pick')));
   root.replaceChildren(h('div', { class: 'msggrid' }, list, panel));
   return root;
@@ -1294,7 +1375,7 @@ async function render() {
   try {
     if (route.startsWith('#/i/')) { const [rid, q] = route.slice(4).split('?'); const qp = new URLSearchParams(q || ''); node = await viewInstrument(decodeURIComponent(rid), qp.get('tf') === 'h4' ? 'h4' : 'd1', qp.get('view') === 'live' ? 'live' : 'analysis'); }
     else if (route.startsWith('#/portfolio')) { const u = Number(new URLSearchParams(route.split('?')[1] || '').get('u')); node = u && u !== me.id ? await viewSharedPortfolio(u) : await viewPortfolio(); }
-    else if (route.startsWith('#/messages')) node = await viewMessages(Number(new URLSearchParams(route.split('?')[1] || '').get('u')) || null);
+    else if (route.startsWith('#/messages')) { const qp = new URLSearchParams(route.split('?')[1] || ''); node = await viewMessages({ u: Number(qp.get('u')) || null, r: Number(qp.get('r')) || null }); }
     else if (route === '#/history') node = await viewHistory();
     else if (route === '#/settings') node = await viewSettings();
     else if (route === '#/help') node = viewHelp();
