@@ -562,3 +562,5 @@ dialog.lightbox img { display: block; max-width: 90vw; max-height: 78vh; border-
 .kvrow > div { display: flex; align-items: center; gap: 8px; }
 .authform [hidden] { display: none; }
 .authform .btn + .btn { margin-top: -4px; }
+.codebox { display: grid; gap: 10px; }
+.codebox[hidden] { display: none; }

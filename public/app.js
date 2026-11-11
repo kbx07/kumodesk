@@ -1208,7 +1208,7 @@ async function showAuth() {
   const btn = h('button', { class: 'btn primary' }, T(setup ? 'auth.submit.setup' : 'auth.submit.login'));
   const code = h('input', { type: 'text', name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 12, placeholder: '123456' });
   const remember = h('input', { type: 'checkbox', name: 'remember', style: 'width:auto;height:auto' });
-  const codeBox = h('div', { hidden: true, style: 'display:grid;gap:10px' }, h('label', null, T('twofa.code'), code, h('span', { class: 'muted' }, T('twofa.code.hint'))),
+  const codeBox = h('div', { hidden: true, class: 'codebox' }, h('label', null, T('twofa.code'), code, h('span', { class: 'muted' }, T('twofa.code.hint'))),
     h('label', { class: 'inline-check' }, remember, T('twofa.remember')));
   let needCode = false;
   const userL = h('label', null, T(setup ? 'auth.username' : 'auth.login'), user), passL = h('label', null, T('auth.password'), pass);
