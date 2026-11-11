@@ -6,6 +6,7 @@ import { analyzeMarket, summarize, diffAlerts } from './analysis.js';
 import { sendReport, sendPositionsReport, smtpConfigured, smtpReady } from './mailer.js';
 import { advisePosition, closedH4, ACTION_RANK } from './positions.js';
 import { pushAlerts } from './push.js';
+import { updateSignals, resultR } from './signals.js';
 
 // Obraz rynku zależy od portfela i limitów użytkownika, więc pamięć podręczna jest osobna dla każdego.
 // Klucz 0 = sam rynek, bez pozycji (migawki, raporty grup, alerty wspólne).
@@ -32,6 +33,15 @@ export function getMarket(userId = null) {
     if (pairs.some((p) => h1[p.id].length)) sessions = computeSessions(h1, pairs);
   }
   const market = analyzeMarket({ instruments, candlesById, groupsById, positions: userId ? db.listPositions(userId) : [], settings, sessions });
+  // „zielone światło”: data sygnału i wynik, gdyby wejść zaraz po nim zgodnie z planem
+  const sig = Object.fromEntries(db.openSignals().map((x) => [x.instrument_id, x]));
+  for (const a of market.instruments) {
+    if (!a.ok) continue;
+    const x = sig[a.id];
+    if (x) a.signal = { date: x.opened, dir: x.dir, entry: x.entry, stop: x.stop, r: Math.round(resultR(x.dir, x.entry, x.stop, a.close) * 100) / 100, pct: Math.round(((x.dir === 'LONG' ? 1 : -1) * (a.close - x.entry) / x.entry) * 10000) / 100 };
+    else if (a.action === 'PLAY') a.signal = { date: a.date, dir: a.dir, entry: a.close, stop: a.plan.params.stop, r: 0, pct: 0, fresh: true }; // sygnał z ostatniej świecy
+    else a.signal = null;
+  }
   cache.set(key, { at: now, market });
   if (cache.size > 200) cache.delete(cache.keys().next().value);
   return market;
@@ -95,6 +105,7 @@ export async function refresh({ groupId = null, trigger = 'manual' } = {}) {
       try { await sendReport({ market, alerts, group, settings, errors: job.errors }); mail = 'sent'; db.addLog({ category: 'notify', code: 'notify.mail', params: { kind: 'report', to: settings.smtp.to } }); }
       catch (e) { mail = `error: ${e.message}`; console.error('[mail]', e.message); db.addLog({ category: 'notify', level: 'error', code: 'notify.mailError', params: { error: e.message.slice(0, 200) } }); }
     }
+    updateSignals().then(() => invalidate()).catch((e) => console.error('[signals]', e.message));
     db.addLog({ category: 'system', level: job.errors.length ? 'warn' : 'info', code: 'system.groupRun', params: { group: group?.name || '*', trigger, fetched, total: list.length, errors: job.errors.length, alerts: alerts.length } });
     return { ok: fetched > 0 || list.length === 0, fetched, total: list.length, errors: job.errors, alerts: alerts.length, mail };
   } finally {

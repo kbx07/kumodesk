@@ -148,6 +148,15 @@ export function openDb(file) {
     CREATE TABLE IF NOT EXISTS push_subs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL, lang TEXT, created TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS messages_room ON messages (room_id, id);
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS signals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      instrument_id TEXT NOT NULL, dir TEXT NOT NULL, grade TEXT,
+      opened TEXT NOT NULL, entry REAL NOT NULL, stop REAL NOT NULL,
+      closed TEXT, exit REAL, r REAL, reason TEXT
+    );
+    CREATE INDEX IF NOT EXISTS signals_inst ON signals (instrument_id, closed);
+  `);
   // weryfikacja dwuetapowa
   addColumn('users', 'totp_secret', 'TEXT');
   addColumn('users', 'totp_pending', 'TEXT');
@@ -619,3 +628,10 @@ export function listLogs({ all = false, userId = null, category = null, before =
   const sql = `SELECT l.*, u.username FROM logs l LEFT JOIN users u ON u.id = l.user_id ${where.length ? 'WHERE ' + where.map((w) => 'l.' + w).join(' AND ') : ''} ORDER BY l.id DESC LIMIT ?`;
   return db.prepare(sql).all(...args, Math.min(500, limit)).map((r) => ({ ...r, params: safeJson(r.params, {}) }));
 }
+
+// ---------- sygnały (skuteczność algorytmu) ----------
+export const openSignals = () => db.prepare('SELECT * FROM signals WHERE closed IS NULL').all();
+export const openSignal = (x) => Number(db.prepare('INSERT INTO signals (instrument_id, dir, grade, opened, entry, stop) VALUES (?,?,?,?,?,?)').run(x.instrument_id, x.dir, x.grade ?? null, x.opened, x.entry, x.stop).lastInsertRowid);
+export const closeSignal = (id, x) => db.prepare('UPDATE signals SET closed = ?, exit = ?, r = ?, reason = ? WHERE id = ?').run(x.closed, x.exit, x.r, x.reason, id);
+export const listSignals = (since) => db.prepare('SELECT * FROM signals WHERE opened >= ? ORDER BY COALESCE(closed, opened) DESC, id DESC').all(since);
+export function resetSignals() { db.exec('DELETE FROM signals'); db.prepare("DELETE FROM meta WHERE key = 'signalsThrough'").run(); }

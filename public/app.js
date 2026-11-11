@@ -455,7 +455,7 @@ function allTable(m) {
   const rank = Object.fromEntries(m.ranking.map((id, i) => [id, i]));
   const cols = [
     ['id', 'col.instrument'], ['close', 'col.close'], ['changePct', 'col.change'], ['d1', 'col.d1'], ['w1', 'col.w1'], ['dir', 'col.dir'],
-    ['align', 'col.tf'], ['sym', 'col.sym'], ['op', 'col.op'], ['grade', 'col.grade'], ['action', 'col.action'], ['failedAt', 'col.stage'], ['held', 'col.held'],
+    ['align', 'col.tf'], ['sym', 'col.sym'], ['op', 'col.op'], ['grade', 'col.grade'], ['action', 'col.action'], ['failedAt', 'col.stage'], ['held', 'col.held'], ['sigDate', 'col.signal'], ['sigR', 'col.sigResult'],
   ];
   const draw = () => {
     let rows = m.instruments.filter((a) => (tableFilter === 'all' || a.category === tableFilter) && (!onlySetups || (a.ok && a.grade !== 'D')) && (!funnelFilter || a.failedAt === funnelFilter));
@@ -464,6 +464,8 @@ function allTable(m) {
       if (x.ok !== y.ok) return x.ok ? -1 : 1;
       let a, b;
       if (k === 'rank') { a = rank[x.id] ?? 999; b = rank[y.id] ?? 999; }
+      else if (k === 'sigDate') { a = x.signal?.date; b = y.signal?.date; }
+      else if (k === 'sigR') { a = x.signal?.r; b = y.signal?.r; }
       else { a = x[k]; b = y[k]; }
       if (a == null) return 1; if (b == null) return -1;
       return (typeof a === 'string' ? a.localeCompare(b) : a - b) * tableSort.dir;
@@ -482,9 +484,11 @@ function allTable(m) {
             h('td', null, miniBar(a.d1)), h('td', null, miniBar(a.w1)), h('td', null, dirBadge(a.dir)),
             h('td', null, T('align.' + a.align)), h('td', null, T('sym.' + a.sym)), h('td', { class: 'num' }, a.op),
             h('td', null, gradeBox(a.grade)), h('td', null, T('action.' + a.action)),
-            h('td', { class: 'small ' + (a.failedAt ? 'muted' : '') }, a.failedAt ? `${stageNo(a.funnel.findIndex((x) => x.key === a.failedAt))} ${T('funnel.stage.' + a.failedAt)}` : '✓ ' + T('funnel.stage.decision')), h('td', { class: 'num' }, a.held))
+            h('td', { class: 'small ' + (a.failedAt ? 'muted' : '') }, a.failedAt ? `${stageNo(a.funnel.findIndex((x) => x.key === a.failedAt))} ${T('funnel.stage.' + a.failedAt)}` : '✓ ' + T('funnel.stage.decision')), h('td', { class: 'num' }, a.held),
+            h('td', { class: 'small nowrap', title: a.signal ? T('signal.tip', { entry: fmtPrice(a.signal.entry), stop: fmtPrice(a.signal.stop) }) : '' }, a.signal ? [a.signal.date, a.signal.dir !== a.dir ? '' : '', a.signal.fresh ? h('span', { class: 'name' }, T('signal.new')) : null] : h('span', { class: 'muted' }, '–')),
+            h('td', { class: 'num nowrap' }, a.signal && !a.signal.fresh ? [h('span', { class: `dot ${a.signal.r > 0 ? 'good' : a.signal.r < 0 ? 'crit' : ''}`, style: 'display:inline-block;margin-right:6px' }), `${signed(a.signal.r, 2)} R`, h('span', { class: 'name' }, `${signed(a.signal.pct, 2)}%`)] : h('span', { class: 'muted' }, '–')))
           : h('tr', { class: 'click', onclick: () => { location.hash = `#/i/${a.id}`; } }, h('td', null, h('b', null, a.id), h('span', { class: 'name' }, instName(a))),
-            h('td', { colspan: 12, class: 'muted' }, T('nodata.row', { bars: a.bars, needed: a.needed }))))))));
+            h('td', { colspan: 14, class: 'muted' }, T('nodata.row', { bars: a.bars, needed: a.needed }))))))));
   };
   draw();
   return card;
@@ -623,13 +627,41 @@ async function viewPortfolio() {
   pf.threats.forEach((x) => thr.append(h('div', { class: 'threat' }, h('span', { class: `lv ${x.level}` }, T('level.' + x.level)), h('span', null, T(x.code, x.params)))));
 
   try { root.append(await shareBox()); } catch { /* sekcja udostępniania jest opcjonalna */ }
+  const accuracy = h('div'); api('/signals').then((d) => accuracy.replaceWith(accuracyCard(d))).catch(() => {});
   if (pf.positions.length) root.append(positionsCard(pf.positions, false));
   root.append(h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h3', null, T('pf.positions'),
       pf.positions.length ? h('button', { class: 'btn sm', onclick: async () => { try { await api('/positions/check', { method: 'POST' }); wasRunning = true; poll(); } catch (e) { toast(e.message === 'BUSY' ? T('refresh.busy') : TE(e.message), true); } } }, T('h4.checkNow')) : null), table),
     h('div', { class: 'grid two', style: 'margin-bottom:14px' }, expCard, thr),
-    h('div', { class: 'card' }, h('h3', null, T('pf.addTitle')), form, h('p', { class: 'hint' }, T('pf.hint'))));
+    h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h3', null, T('pf.addTitle')), form, h('p', { class: 'hint' }, T('pf.hint'))),
+    accuracy);
   return root;
 }
+
+/** Skuteczność algorytmu: w ilu przypadkach „zielone światło” skończyło się zyskiem. */
+function accuracyCard(d) {
+  const st = d.stats, a = st.all;
+  const card = h('div', { class: 'card' }, h('h3', null, T('acc2.title'), h('span', { class: 'muted small' }, d.busy ? T('acc2.busy') : st.from ? T('acc2.period', { from: st.from, to: d.through || '–' }) : '')));
+  if (!a.n) { card.append(h('p', { class: 'muted' }, T(d.busy ? 'acc2.busy.text' : 'acc2.none'))); return card; }
+  const stat = (k, v, sub, tone) => h('div', { class: 'card tile' }, h('div', { class: 'k' }, tone ? h('span', { class: `dot ${tone}` }) : null, T(k)), h('div', { class: 'v' }, v), h('div', { class: 's' }, sub || ''));
+  const tn = (v) => (v > 0 ? 'good' : v < 0 ? 'crit' : '');
+  const share = a.n ? (a.wins / a.n) * 100 : 0;
+  card.append(
+    h('div', { class: 'grid captiles', style: 'margin-bottom:12px' },
+      stat('acc2.right', `${a.wins} (${a.hitRate}%)`, T('acc2.right.sub', { n: a.n })),
+      stat('acc2.wrong', `${a.losses} (${round1(100 - a.hitRate)}%)`, T('acc2.wrong.sub', { n: st.stopped })),
+      stat('acc2.avg', `${signed(a.avgR, 2)} R`, T('acc2.avg.sub', { total: signed(a.totalR, 1) }), tn(a.avgR)),
+      stat('acc2.grades', `A ${st.A.hitRate ?? '–'}% · B ${st.B.hitRate ?? '–'}%`, T('acc2.grades.sub', { a: st.A.n, ar: st.A.avgR != null ? signed(st.A.avgR, 2) : '–', b: st.B.n, br: st.B.avgR != null ? signed(st.B.avgR, 2) : '–' }))),
+    h('div', { class: 'splitbar', title: `${a.wins} / ${a.losses}` }, h('i', { style: `width:${share}%;background:var(--good)` }), h('i', { style: `width:${100 - share}%;background:var(--crit)` })),
+    h('p', { class: 'hint' }, T('acc2.rules')),
+    d.recent.length ? h('div', { class: 'tablewrap' }, h('table', null,
+      h('thead', null, h('tr', null, [T('col.instrument'), T('col.dir'), T('col.grade'), T('col.signal'), T('close.date'), T('acc2.end'), T('close.resultR')].map((x) => h('th', null, x)))),
+      h('tbody', null, d.recent.map((x) => h('tr', { class: 'click', onclick: () => { location.hash = `#/i/${encodeURIComponent(x.instrument_id)}`; } },
+        h('td', null, h('b', null, x.instrument_id)), h('td', null, dirBadge(x.dir)), h('td', null, x.grade ? gradeBox(x.grade) : '–'), h('td', { class: 'small nowrap' }, x.opened), h('td', { class: 'small nowrap' }, x.closed),
+        h('td', { class: 'small' }, T('acc2.reason.' + x.reason)), h('td', { class: 'num nowrap' }, h('span', { class: `dot ${tn(x.r)}`, style: 'display:inline-block;margin-right:6px' }), `${signed(x.r, 2)} R`)))))) : '',
+    isAdmin() ? h('div', { class: 'actions' }, h('button', { class: 'btn sm', onclick: async () => { if (!confirm(T('acc2.rebuild.confirm'))) return; try { await api('/signals/rebuild', { method: 'POST' }); toast(T('acc2.rebuild.started')); render(); } catch (e) { toast(e.message === 'BUSY' ? T('refresh.busy') : TE(e.message), true); } } }, T('acc2.rebuild'))) : '');
+  return card;
+}
+const round1 = (v) => Math.round(v * 10) / 10;
 
 // ---------- HISTORIA ----------
 async function viewHistory() {

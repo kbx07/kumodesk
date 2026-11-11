@@ -15,6 +15,7 @@ import * as auth from './auth.js';
 import * as totp from './totp.js';
 import QRCode from 'qrcode';
 import { vapidPublicKey, pushToUser } from './push.js';
+import { updateSignals, signalStats, signalsBusy } from './signals.js';
 import { t as tr } from '../public/i18n.js';
 import { isValidTimezone, hhmmToMinutes, nextRun, localParts, isBarClosed } from './timeutil.js';
 
@@ -22,7 +23,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3003;
 const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
-const VERSION = '2.3.0';
+const VERSION = '2.4.0';
 
 db.openDb(path.join(DATA_DIR, 'kumodesk.db'));
 
@@ -234,6 +235,19 @@ app.delete('/api/theme/:slot', admin, wrap((req, res) => {
   const all = db.getSettings(); all.appearance.custom = custom;
   db.replaceSetting('appearance', all.appearance);
   res.json({ appearance: appearance() });
+}));
+
+// ---------- skuteczność algorytmu ----------
+app.get('/api/signals', wrap((req, res) => {
+  const since = new Date(Date.now() - 370 * 86400000).toISOString().slice(0, 10);
+  const list = db.listSignals(since);
+  res.json({ busy: signalsBusy(), through: db.getMeta('signalsThrough'), stats: signalStats(list), recent: list.filter((x) => x.closed).slice(0, 25), open: list.filter((x) => !x.closed).length });
+}));
+app.post('/api/signals/rebuild', admin, wrap((req, res) => {
+  if (signalsBusy()) throw Object.assign(new Error('BUSY'), { status: 409 });
+  db.resetSignals();
+  updateSignals().then(() => invalidate()).catch((e) => console.error('[signals]', e.message));
+  res.status(202).json({ started: true });
 }));
 
 // ---------- logi ----------
@@ -755,4 +769,6 @@ app.listen(PORT, HOST, () => {
   db.addLog({ category: 'system', code: 'system.start', params: { version: VERSION } });
   console.log(`KumoDesk ${VERSION} – http://${HOST}:${PORT} (dane: ${DATA_DIR})`);
   if (process.env.KUMODESK_NO_SCHEDULER !== '1') startScheduler();
+  // doliczenie sygnałów w tle (przy pierwszym uruchomieniu: ostatni rok)
+  if (process.env.KUMODESK_NO_SIGNALS !== '1') setTimeout(() => updateSignals().then(() => invalidate()).catch((e) => console.error('[signals]', e.message)), 3000);
 });

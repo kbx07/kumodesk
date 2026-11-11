@@ -521,3 +521,6 @@ body.locked .decor .fig { opacity: .85; } body.locked .bit { opacity: .8; }
 .fileicon { flex: none; }
 dialog.lightbox { width: auto; max-width: 94vw; padding: 12px; }
 dialog.lightbox img { display: block; max-width: 90vw; max-height: 78vh; border-radius: 6px; margin: 0 auto; }
+
+.splitbar { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; }
+.splitbar i { display: block; height: 100%; }

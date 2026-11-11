@@ -41,7 +41,7 @@ test('serwer: konfiguracja, logowanie, role, izolacja portfeli, udostępnianie, 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kd-auth-'));
   const port = 39000 + Math.floor(Math.random() * 900);
   const srv = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/index.js'], {
-    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dir, KUMODESK_NO_SCHEDULER: '1' }, stdio: 'ignore',
+    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dir, KUMODESK_NO_SCHEDULER: '1', KUMODESK_NO_SIGNALS: '1' }, stdio: 'ignore',
   });
   t.after(() => { srv.kill(); fs.rmSync(dir, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${port}/api`;
