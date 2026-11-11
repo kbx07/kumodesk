@@ -11,7 +11,7 @@ import { computeIchimoku } from './ichimoku.js';
 import { getMarket, refresh, checkPositions, invalidate, job } from './runner.js';
 import { closedH4 } from './positions.js';
 import { startScheduler } from './scheduler.js';
-import { sendTest, smtpConfigured } from './mailer.js';
+import { sendTest, sendInvite, smtpConfigured, smtpReady } from './mailer.js';
 import * as auth from './auth.js';
 import * as totp from './totp.js';
 import QRCode from 'qrcode';
@@ -167,11 +167,27 @@ app.get('/api/auth/theme/:slot', wrap((req, res) => {
 app.post('/api/auth/logout', wrap((req, res) => { const u = auth.currentUser(req); if (u) log(req, 'auth', 'auth.logout', {}, 'info', u.id); auth.endSession(req, res); res.json({ ok: true }); }));
 
 // ---------- account and users ----------
+const LANGS = ['pl', 'de', 'en'];
+const INVITE_DAYS = 7;
+const tokenHash = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
+/** Creates an invitation for the account and e-mails the link where the user sets their own password. */
+async function invite(req, user, lang) {
+  const settings = db.getSettings();
+  if (!user.email) throw bad('err.inviteEmail');
+  if (!smtpReady(settings)) throw bad('err.inviteSmtp');
+  const token = crypto.randomBytes(32).toString('base64url');
+  db.createInvite(user.id, tokenHash(token), Date.now() + INVITE_DAYS * 86400000);
+  const link = `${req.headers['x-forwarded-proto'] || req.protocol}://${req.headers['x-forwarded-host'] || req.headers.host}/#/invite/${token}`;
+  try { await sendInvite(settings, { to: user.email, lang: lang || user.lang, username: user.username, link, days: INVITE_DAYS }); }
+  catch (e) { console.error('[mail]', e.message); log(req, 'notify', 'notify.mailError', { error: e.message.slice(0, 200) }, 'error'); throw bad('err.inviteSend'); }
+  log(req, 'admin', 'admin.userInvite', { name: user.username, to: user.email });
+}
 const cleanEmail = (e) => { const v = String(e || '').trim().slice(0, 200); if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw bad('err.email'); return v; };
 app.put('/api/account', wrap((req, res) => {
   const b = req.body || {};
   const patch = {};
   if (b.email !== undefined) patch.email = cleanEmail(b.email);
+  if (LANGS.includes(b.lang)) patch.lang = b.lang; // interface language – e-mails follow it
   if (b.password) {
     if (!auth.verifyPassword(String(b.current || ''), db.getUserAuthById(req.user.id).pass_hash)) throw bad('err.passwordCurrent');
     if (!auth.validPassword(b.password)) throw bad('err.password');
@@ -183,13 +199,41 @@ app.put('/api/account', wrap((req, res) => {
 }));
 // list for choosing a recipient (sharing, messages): no e-mail addresses for regular users
 app.get('/api/users', wrap((req, res) => res.json(db.listUsers().map((u) => (req.user.role === 'admin' ? u : { id: u.id, username: u.username, role: u.role })))));
-app.post('/api/users', admin, wrap((req, res) => {
+app.post('/api/users', admin, wrap(async (req, res) => {
   const { username, password, role, email } = req.body || {};
+  const byInvite = !!req.body?.invite, lang = LANGS.includes(req.body?.lang) ? req.body.lang : null;
   if (!auth.validUsername(username)) throw bad('err.username');
-  if (!auth.validPassword(password)) throw bad('err.password');
+  if (!byInvite && !auth.validPassword(password)) throw bad('err.password');
   if (db.getUserAuth(String(username))) throw bad('err.userExists');
+  const mail = cleanEmail(email);
+  if (byInvite && !mail) throw bad('err.inviteEmail');
+  if (byInvite && !smtpReady(db.getSettings())) throw bad('err.inviteSmtp');
+  // an invited account gets a random password nobody knows until the user sets their own
+  const user = db.createUser({ username: String(username), pass_hash: auth.hashPassword(byInvite ? crypto.randomBytes(32).toString('hex') : password), role: role === 'admin' ? 'admin' : 'user', email: mail, lang });
+  if (byInvite) {
+    try { await invite(req, user, lang); } catch (e) { db.deleteUser(user.id); throw e; }
+  }
   log(req, 'admin', 'admin.userAdd', { name: String(username) });
-  res.status(201).json(db.createUser({ username: String(username), pass_hash: auth.hashPassword(password), role: role === 'admin' ? 'admin' : 'user', email: cleanEmail(email) }));
+  res.status(201).json(db.getUser(user.id));
+}));
+// sends the invitation again (a new link; the previous one stops working)
+app.post('/api/users/:id/invite', admin, wrap(async (req, res) => {
+  const cur = db.getUser(Number(req.params.id));
+  if (!cur) return res.status(404).json({ error: 'err.notFound' });
+  if (!cur.invited) throw bad('err.inviteDone');
+  await invite(req, cur, null);
+  res.json({ ok: true });
+}));
+// the invited person: check the link, then choose a password (public – the token is the proof)
+const invited = (req) => { const inv = db.getInvite(tokenHash(req.params.token)); const u = inv && db.getUser(inv.user_id); if (!u) throw Object.assign(new Error('err.inviteInvalid'), { status: 404 }); return u; };
+app.get('/api/auth/invite/:token', wrap((req, res) => res.json({ username: invited(req).username })));
+app.post('/api/auth/invite/:token', wrap((req, res) => {
+  const u = invited(req);
+  if (!auth.validPassword(req.body?.password)) throw bad('err.password');
+  db.updateUser(u.id, { pass_hash: auth.hashPassword(req.body.password), ...(LANGS.includes(req.body?.lang) ? { lang: req.body.lang } : {}) }); // also removes the invitation
+  auth.startSession(req, res, u.id);
+  log(req, 'auth', 'auth.inviteAccepted', {}, 'info', u.id);
+  res.json({ user: db.getUser(u.id) });
 }));
 app.put('/api/users/:id', admin, wrap((req, res) => {
   const id = Number(req.params.id), cur = db.getUser(id);

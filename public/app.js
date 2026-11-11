@@ -748,7 +748,7 @@ async function viewSettings() {
     general() {
       const f = h('form', { class: 'form' },
         field(T('set.uiLang'), h('select', { name: 'ui' }, ['auto', 'pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === langPref }, l === 'auto' ? T('set.auto') : T('lang.' + l)))), T('set.uiLang.hint')),
-        isAdmin() ? field(T('set.mailLang'), h('select', { name: 'mail' }, ['pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === (s.notify.lang || lang) }, T('lang.' + l))))) : null,
+        isAdmin() ? field(T('set.mailLang'), h('select', { name: 'mail' }, ['pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === (s.notify.lang || lang) }, T('lang.' + l)))), T('set.mailLang.hint')) : null,
         h('div', null, h('button', { class: 'btn primary' }, T('save'))));
       f.onsubmit = async (e) => { e.preventDefault(); const d = formData(f); if (isAdmin()) await save({ notify: { lang: d.mail } }); setLang(d.ui); };
       // account: e-mail and password change
@@ -823,15 +823,24 @@ async function viewSettings() {
     users() {
       const box = h('div', null, h('div', { class: 'muted' }, T('loading')));
       const userDialog = (u) => {
+        // new account: either a password typed here, or an e-mailed invitation where the person sets their own
+        const canInvite = !!s.smtp.host;
+        const passInput = h('input', { type: 'password', name: 'password', required: !u, minlength: 8, autocomplete: 'new-password', placeholder: u ? T('usr.password.keep') : '' });
+        const passField = field(T('auth.password'), passInput, T('auth.rules'));
+        const langField = field(T('usr.inviteLang'), h('select', { name: 'lang' }, ['pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === lang }, T('lang.' + l)))), T('usr.invite.hint'));
+        langField.hidden = true;
+        const modeSel = h('select', { name: 'mode', onchange: () => { const inv = modeSel.value === 'invite'; passField.hidden = inv; passInput.required = !inv; passInput.disabled = inv; langField.hidden = !inv; f.elements.email.required = inv; } },
+          h('option', { value: 'password' }, T('usr.mode.password')), h('option', { value: 'invite', disabled: !canInvite }, T('usr.mode.invite')));
+        const modeField = u ? null : field(T('usr.mode'), modeSel, canInvite ? null : T('usr.mode.invite.off'));
         const f = h('form', { class: 'form' },
           field(T('auth.username'), h('input', { type: 'text', name: 'username', value: u?.username || '', required: true, disabled: !!u, minlength: 3, maxlength: 32, autocomplete: 'off' })),
           field(T('usr.role'), h('select', { name: 'role' }, ['user', 'admin'].map((r) => h('option', { value: r, selected: r === (u?.role || 'user') }, T('user.role.' + r))))),
           field(T('acc.email'), h('input', { type: 'email', name: 'email', value: u?.email || '', autocomplete: 'off' })),
-          field(T('auth.password'), h('input', { type: 'password', name: 'password', required: !u, minlength: 8, autocomplete: 'new-password', placeholder: u ? T('usr.password.keep') : '' }), T('auth.rules')),
+          modeField, passField, langField,
           u?.twofa?.enabled ? h('label', { class: 'inline-check wide' }, h('input', { type: 'checkbox', name: 'reset2fa' }), T('usr.reset2fa')) : null);
         dialog(u ? T('usr.edit', { name: u.username }) : T('usr.add'), f, async () => {
           const d = formData(f);
-          await api(u ? `/users/${u.id}` : '/users', { method: u ? 'PUT' : 'POST', body: u ? { role: d.role, email: d.email, reset2fa: d.reset2fa === 'on', ...(d.password ? { password: d.password } : {}) } : d });
+          await api(u ? `/users/${u.id}` : '/users', { method: u ? 'PUT' : 'POST', body: u ? { role: d.role, email: d.email, reset2fa: d.reset2fa === 'on', ...(d.password ? { password: d.password } : {}) } : d.mode === 'invite' ? { username: d.username, role: d.role, email: d.email, invite: true, lang: d.lang } : { username: d.username, role: d.role, email: d.email, password: d.password } });
         }, T('usr.hint'));
       };
       api('/users').then((list) => {
@@ -839,9 +848,10 @@ async function viewSettings() {
           h('div', { class: 'tablewrap' }, h('table', null,
             h('thead', null, h('tr', null, [T('auth.username'), T('usr.role'), T('acc.email'), '2FA', T('usr.created'), ''].map((x) => h('th', null, x)))),
             h('tbody', null, list.map((u) => h('tr', null,
-              h('td', null, h('span', { class: 'nowrap' }, h('span', { class: 'avatar', style: 'margin-right:8px' }, u.username.slice(0, 1).toUpperCase()), h('b', null, u.username), u.id === me.id ? h('span', { class: 'name' }, T('usr.you')) : null)),
+              h('td', null, h('span', { class: 'nowrap' }, h('span', { class: 'avatar', style: 'margin-right:8px' }, u.username.slice(0, 1).toUpperCase()), h('b', null, u.username), u.id === me.id ? h('span', { class: 'name' }, T('usr.you')) : null, u.invited ? h('span', { class: 'badge', style: 'margin-left:8px' }, h('span', { class: 'dot warn' }), T('usr.invited')) : null)),
               h('td', null, T('user.role.' + u.role)), h('td', { class: 'muted' }, u.email || '–'), h('td', null, h('span', { class: 'badge' }, h('span', { class: `dot ${u.twofa.enabled ? 'good' : 'warn'}` }), T(u.twofa.enabled ? 'twofa.on' : 'twofa.off'))), h('td', { class: 'muted small' }, fmtTs(u.created)),
               h('td', { class: 'nowrap' }, h('button', { class: 'btn sm', onclick: () => userDialog(u) }, T('edit')), ' ',
+                u.invited ? [h('button', { class: 'btn sm', onclick: async (e) => { e.target.disabled = true; try { await api(`/users/${u.id}/invite`, { method: 'POST' }); toast(T('usr.resent')); } catch (err) { toast(TE(err.message), true); } e.target.disabled = false; } }, T('usr.resend')), ' '] : null,
                 u.id !== me.id ? h('button', { class: 'btn sm danger', onclick: async () => { if (!confirm(T('usr.confirmDelete', { name: u.username }))) return; try { await api(`/users/${u.id}`, { method: 'DELETE' }); render(); } catch (e) { toast(TE(e.message), true); } } }, T('delete')) : null)))))),
           h('p', { class: 'hint' }, T('usr.info'))));
       }).catch((e) => box.replaceChildren(h('div', { class: 'card err' }, TE(e.message))));
@@ -972,7 +982,7 @@ async function viewSettings() {
           h('button', { class: 'btn', type: 'button', onclick: async (e) => {
             if (!(await submit())) return;
             e.target.disabled = true;
-            try { await api('/settings/test-smtp', { method: 'POST', body: { lang: s.notify.lang || lang } }); toast(T('smtp.testOk')); }
+            try { await api('/settings/test-smtp', { method: 'POST', body: { lang } }); toast(T('smtp.testOk')); }
             catch (err) { toast(T('smtp.testFail') + ' ' + TE(err.message), true); }
             e.target.disabled = false;
           } }, T('smtp.test'))));
@@ -1133,6 +1143,8 @@ async function showAuth() {
   applyLook();
   if (st.user) { me = st.user; if (needEnrol()) { showEnrol(); return false; } $('#auth').hidden = true; document.body.classList.remove('locked'); return true; }
   const setup = st.setup;
+  const inviteToken = /^#\/invite\/([\w-]{20,})$/.exec(location.hash)?.[1];
+  if (inviteToken && !setup) return showInvite(inviteToken, st);
   const err = h('div', { class: 'err small', role: 'alert' });
   const user = h('input', { type: 'text', name: 'username', autocomplete: 'username', required: true, minlength: 3, maxlength: 32, autofocus: true });
   const pass = h('input', { type: 'password', name: 'password', autocomplete: setup ? 'new-password' : 'current-password', required: true, minlength: setup ? 8 : 1 });
@@ -1180,6 +1192,47 @@ async function showAuth() {
       h('div', { class: 'authfoot' }, langSel, h('span', { class: 'muted small' }, st.version ? `v${st.version}` : ''))));
   el.hidden = false; document.body.classList.add('locked');
   setTimeout(() => user.focus(), 30);
+  return false;
+}
+/** Invitation link: the invited person chooses a password for the account an administrator prepared. */
+async function showInvite(token, st) {
+  const el = $('#auth');
+  const leave = () => { history.replaceState(null, '', location.pathname + '#/'); };
+  const card = (...kids) => {
+    el.className = `auth lbg-${(lookCfg.theme || 'normal') === 'normal' ? lookCfg.loginBg : 'theme'}`;
+    el.replaceChildren(h('div', { class: 'authbg', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')),
+      h('div', { class: 'authcard' }, h('div', { class: 'authbrand' }, h('span', null, 'KumoDesk')), ...kids,
+        h('div', { class: 'authfoot' }, h('span', { class: 'muted small' }, st.version ? `v${st.version}` : ''))));
+    el.hidden = false; document.body.classList.add('locked');
+  };
+  let info;
+  try { info = await api(`/auth/invite/${token}`); }
+  catch (e) {
+    card(h('h1', null, T('invite.title')), h('p', { class: 'err' }, TE(e.message)),
+      h('button', { class: 'btn', onclick: () => { leave(); showAuth(); } }, T('auth.submit.login')));
+    return false;
+  }
+  const err = h('div', { class: 'err small', role: 'alert' });
+  const pass = h('input', { type: 'password', name: 'password', autocomplete: 'new-password', required: true, minlength: 8 });
+  const pass2 = h('input', { type: 'password', name: 'password2', autocomplete: 'new-password', required: true, minlength: 8 });
+  const btn = h('button', { class: 'btn primary' }, T('invite.submit'));
+  const form = h('form', { class: 'authform' },
+    h('label', null, T('auth.username'), h('input', { type: 'text', name: 'username', autocomplete: 'username', value: info.username, readonly: true })),
+    h('label', null, T('auth.password'), pass), h('label', null, T('auth.password2'), pass2), err, btn, h('p', { class: 'hint' }, T('invite.rules')));
+  form.onsubmit = async (e) => {
+    e.preventDefault(); err.textContent = '';
+    if (pass.value !== pass2.value) { err.textContent = T('auth.mismatch'); return; }
+    btn.disabled = true;
+    try {
+      const r = await api(`/auth/invite/${token}`, { method: 'POST', body: { password: pass.value, lang } });
+      me = r.user; leave();
+      if (needEnrol()) { showEnrol(); return; }
+      el.hidden = true; document.body.classList.remove('locked');
+      startApp();
+    } catch (ex) { err.textContent = TE(ex.message); btn.disabled = false; }
+  };
+  card(h('h1', null, T('invite.title')), h('p', { class: 'muted' }, T('invite.sub', { name: info.username })), form);
+  setTimeout(() => pass.focus(), 30);
   return false;
 }
 const needEnrol = () => !!me && me.twofa?.required && !me.twofa?.enabled;
@@ -1489,7 +1542,14 @@ function setMode(mo) { uiMode = mo; store.set('kd.mode', mo); render(); }
 function setLang(pref) {
   langPref = pref; store.set('kd.lang', pref);
   lang = pref === 'auto' ? detectLang(navigator.languages || [navigator.language]) : resolveLang(pref);
+  syncLang();
   render();
+}
+/** Tells the server which language this user reads, so e-mails arrive in it. */
+function syncLang() {
+  if (!me || me.lang === lang || needEnrol()) return;
+  me.lang = lang;
+  api('/account', { method: 'PUT', body: { lang } }).catch(() => {});
 }
 
 $('#refresh').onclick = () => startRefresh();
@@ -1504,6 +1564,7 @@ window.addEventListener('hashchange', render);
 let appStarted = false;
 async function startApp() {
   usersCache = null;
+  syncLang();
   render();
   try {
     const [, st, cfg] = await Promise.all([loadMarket(), api('/status'), api('/settings')]);

@@ -302,6 +302,7 @@ body.locked { overflow: hidden; }
 body.locked > header, body.locked > main, body.locked > footer { visibility: hidden; }
 .auth { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 16px; overflow: auto; }
 .auth[hidden] { display: none; }
+.form label[hidden] { display: none; }
 .authbg { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .authbg i { position: absolute; display: block; border-radius: 50%; filter: blur(70px); opacity: .55; will-change: transform; }
 .authcard { position: relative; width: min(420px, 100%); background: color-mix(in srgb, var(--surface) 86%, transparent); backdrop-filter: blur(18px); border: 1px solid var(--border); border-radius: 18px; padding: 28px; box-shadow: 0 30px 80px rgba(0,0,0,.45); }

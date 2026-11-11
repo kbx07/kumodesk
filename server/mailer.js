@@ -42,8 +42,8 @@ export async function sendTest(settings, lang) {
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const COLORS = { LONG: '#0a7d0a', SHORT: '#c62f2f', A: '#0a7d0a', B: '#1c5cab', C: '#8a6100', D: '#777' };
 
-export function buildReport({ market, alerts, group, settings, errors = [] }) {
-  const L = resolveLang(settings.notify.lang);
+export function buildReport({ market, alerts, group, settings, errors = [], lang = null }) {
+  const L = resolveLang(lang || settings.notify.lang);
   const tt = (k, p) => t(L, k, p);
   const byId = Object.fromEntries(market.instruments.map((a) => [a.id, a]));
   const inGroup = (a) => !group || a.group_id === group.id;
@@ -104,9 +104,42 @@ export function planText(lang, a) {
   return t(lang, a.plan.code, p);
 }
 
+/**
+ * Splits the general recipients by language: an address that belongs to an account gets that account's
+ * language, every other address the default e-mail language. Returns [[lang, 'a@x, b@y'], ...].
+ */
+export function recipientsByLang(settings, users = []) {
+  const byMail = new Map(users.filter((u) => u.email && u.lang).map((u) => [u.email.toLowerCase(), u.lang]));
+  const groups = new Map();
+  for (const addr of String(settings.smtp.to || '').split(/[,;]/).map((x) => x.trim()).filter(Boolean)) {
+    const m = /<([^>]+)>/.exec(addr);
+    const L = resolveLang(byMail.get((m ? m[1] : addr).toLowerCase()) || settings.notify.lang);
+    groups.set(L, [...(groups.get(L) || []), addr]);
+  }
+  return [...groups].map(([L, list]) => [L, list.join(', ')]);
+}
+
+/** Report after a group's close: one message per language of the recipients. */
 export async function sendReport(ctx) {
-  const { subject, html, text } = buildReport(ctx);
-  await send(ctx.settings, subject, html, text);
+  for (const [lang, to] of recipientsByLang(ctx.settings, ctx.users)) {
+    const { subject, html, text } = buildReport({ ...ctx, lang });
+    await send(ctx.settings, subject, html, text, to);
+  }
+}
+
+/** Invitation: a link where the new user chooses their own password. */
+export async function sendInvite(settings, { to, lang, username, link, days }) {
+  const L = resolveLang(lang || settings.notify.lang);
+  const tt = (k, p) => t(L, k, p);
+  const p = { name: username, days };
+  const html = `<div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#111;max-width:560px">
+  <h2 style="margin:0 0 10px">KumoDesk</h2>
+  <p>${esc(tt('mail.invite.body', p))}</p>
+  <p style="margin:22px 0"><a href="${esc(link)}" style="background:#1c5cab;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;display:inline-block">${esc(tt('mail.invite.button'))}</a></p>
+  <p style="color:#555;font-size:13px">${esc(tt('mail.invite.alt'))}<br><a href="${esc(link)}">${esc(link)}</a></p>
+  <p style="color:#888;font-size:12px;margin-top:18px">${esc(tt('mail.invite.foot', p))}</p></div>`;
+  const text = [tt('mail.invite.body', p), '', link, '', tt('mail.invite.foot', p)].join('\n');
+  await send(settings, tt('mail.invite.subject'), html, text, to);
 }
 
 export function adviceText(lang, c) {
@@ -115,8 +148,8 @@ export function adviceText(lang, c) {
     + (a.suggestedStop != null ? ' ' + t(lang, 'advice.newStop', { stop: fmtPrice(a.suggestedStop) }) : '');
 }
 
-export function buildPositionsReport({ results, changed, settings }) {
-  const L = resolveLang(settings.notify.lang);
+export function buildPositionsReport({ results, changed, settings, lang = null }) {
+  const L = resolveLang(lang || settings.notify.lang);
   const tt = (k, p) => t(L, k, p);
   const rank = { EXIT: 5, REDUCE: 4, TIGHTEN: 3, PARTIAL: 2, TRAIL: 1, HOLD: 0, NO_DATA: 0 };
   const rows = [...results].sort((x, y) => rank[y.advice.action] - rank[x.advice.action]);

@@ -102,7 +102,7 @@ export async function refresh({ groupId = null, trigger = 'manual' } = {}) {
     let mail = null;
     const mode = settings.notify.mode;
     if (trigger === 'schedule' && fetched > 0 && smtpConfigured(settings) && (mode === 'report' || (mode === 'alerts' && alerts.length))) {
-      try { await sendReport({ market, alerts, group, settings, errors: job.errors }); mail = 'sent'; db.addLog({ category: 'notify', code: 'notify.mail', params: { kind: 'report', to: settings.smtp.to } }); }
+      try { await sendReport({ market, alerts, group, settings, errors: job.errors, users: db.listUsers() }); mail = 'sent'; db.addLog({ category: 'notify', code: 'notify.mail', params: { kind: 'report', to: settings.smtp.to } }); }
       catch (e) { mail = `error: ${e.message}`; console.error('[mail]', e.message); db.addLog({ category: 'notify', level: 'error', code: 'notify.mailError', params: { error: e.message.slice(0, 200) } }); }
     }
     updateSignals().then(() => invalidate()).catch((e) => console.error('[signals]', e.message));
@@ -167,7 +167,7 @@ export async function checkPositions({ trigger = 'manual', userId = null } = {})
       const to = user?.email || (!user || user.role === 'admin' ? global.smtp.to : null);
       const mode = global.notify.positions;
       if (trigger === 'schedule' && to && smtpReady(global) && (mode === 'always' || (mode === 'changes' && changed.length))) {
-        try { await sendPositionsReport({ results, changed, settings, to }); mails.push('sent'); db.addLog({ user_id: owner, category: 'notify', code: 'notify.mail', params: { kind: 'positions', to } }); }
+        try { await sendPositionsReport({ results, changed, settings, to, lang: user?.lang }); mails.push('sent'); db.addLog({ user_id: owner, category: 'notify', code: 'notify.mail', params: { kind: 'positions', to } }); }
         catch (e) { mails.push(`error: ${e.message}`); console.error('[mail]', e.message); db.addLog({ user_id: owner, category: 'notify', level: 'error', code: 'notify.mailError', params: { error: e.message.slice(0, 200) } }); }
       }
     }

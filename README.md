@@ -245,6 +245,8 @@ Open positions show the current price and running result, refreshed every 20 sec
 
 On the first launch the app shows a form to create the **administrator account**; from then on everyone signs in with a username and password.
 
+- **Invitations** — when adding a user an administrator either types a password or, once SMTP is configured, sends an invitation by e-mail. The person gets a link valid for 7 days, chooses their own password and then sets up two-factor authentication. A pending invitation can be resent from the user list.
+- **E-mail language** — every user gets e-mails in the language of their own interface; addresses without an account use the default e-mail language from Settings → General.
 - **Roles** — administrators manage accounts (Settings → Users) and server settings (data sources, instruments, time groups, SMTP, appearance); there can be several. Users use the analysis and keep their own portfolio.
 - **Per-account data** — open positions, trade history, capital, risk limits, position notifications and messages belong to the account. The market analysis is shared. Data from before accounts existed is handed to the first administrator.
 - **Share a portfolio** — on the Portfolio page tick "Share my portfolio" and pick people; they get a read-only view of your positions, results and trades.

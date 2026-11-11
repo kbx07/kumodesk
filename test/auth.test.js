@@ -4,6 +4,8 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import net from 'node:net';
+import { recipientsByLang } from '../server/mailer.js';
 import { hashPassword, verifyPassword, validUsername, validPassword } from '../server/auth.js';
 import * as totp from '../server/totp.js';
 
@@ -236,7 +238,62 @@ test('server: setup, sign-in, roles, portfolio isolation, sharing, messages', as
   assert.equal((await alice('PUT', '/users/1', { role: 'user' })).status, 400);      // the last administrator
   assert.equal((await carol('GET', '/dashboard')).status, 401);                      // a deleted account's session no longer works
 
+  // invitations: the administrator sends a link by e-mail and the person sets their own password
+  assert.equal((await alice('POST', '/users', { username: 'dave', email: 'dave@example.test', invite: true })).body.error, 'err.inviteSmtp');
+  const mails = [];
+  const smtp = net.createServer((sock) => { // a minimal SMTP server that only records messages
+    let buf = '', data = null;
+    sock.write('220 test\r\n');
+    sock.on('data', (chunk) => {
+      buf += chunk;
+      for (let i; (i = buf.indexOf('\r\n')) >= 0;) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 2);
+        if (data != null) { if (line === '.') { mails.push(data); data = null; sock.write('250 ok\r\n'); } else data += line + '\r\n'; continue; }
+        const cmd = line.slice(0, 4).toUpperCase();
+        if (cmd === 'DATA') { data = ''; sock.write('354 go\r\n'); } else if (cmd === 'QUIT') { sock.end('221 bye\r\n'); } else sock.write('250 ok\r\n');
+      }
+    });
+  });
+  await new Promise((r) => smtp.listen(0, '127.0.0.1', r));
+  t.after(() => smtp.close());
+  assert.equal((await alice('PUT', '/settings', { smtp: { host: '127.0.0.1', port: smtp.address().port, security: 'none', from: 'kumodesk@example.test' } })).status, 200);
+  assert.equal((await alice('POST', '/users', { username: 'dave', invite: true })).body.error, 'err.inviteEmail');
+  const inv = await alice('POST', '/users', { username: 'dave', email: 'dave@example.test', invite: true, lang: 'de' });
+  assert.equal(inv.status, 201); assert.equal(inv.body.invited, true); assert.equal(inv.body.lang, 'de');
+  assert.equal(mails.length, 1);
+  const decoded = mails[0].replace(/=\r\n/g, '').replace(/=([0-9A-F]{2})/g, (_, x) => String.fromCharCode(parseInt(x, 16)));
+  assert.match(decoded, /To: dave@example\.test/); assert.match(decoded, /Subject: \[KumoDesk\] Einladung/); // in the invited person's language
+  const token = /#\/invite\/([\w-]+)/.exec(decoded)[1];
+  const dave = client();
+  assert.equal((await dave('GET', '/auth/invite/not-a-real-token-0000000000')).status, 404);
+  assert.equal((await dave('GET', `/auth/invite/${token}`)).body.username, 'dave');
+  assert.equal((await dave('POST', `/auth/invite/${token}`, { password: 'short' })).status, 400);
+  const accepted = await dave('POST', `/auth/invite/${token}`, { password: 'dave-password' });
+  assert.equal(accepted.status, 200); assert.equal(accepted.body.user.invited, false); assert.equal(accepted.body.user.twofa.required, true);
+  assert.equal((await dave('GET', '/dashboard')).status, 403);                       // signed in, but 2FA comes first
+  assert.equal((await anon('GET', `/auth/invite/${token}`)).status, 404);            // the link works once
+  assert.equal((await alice('POST', `/users/${inv.body.id}/invite`)).body.error, 'err.inviteDone');
+  assert.equal((await client()('POST', '/auth/login', { username: 'dave', password: 'dave-password' })).status, 200);
+  // a resent invitation replaces the previous link
+  const inv2 = await alice('POST', '/users', { username: 'erin', email: 'erin@example.test', invite: true });
+  const firstToken = /#\/invite\/([\w-]+)/.exec(mails[1].replace(/=\r\n/g, ''))[1];
+  assert.equal((await alice('POST', `/users/${inv2.body.id}/invite`)).status, 200);
+  assert.equal(mails.length, 3);
+  assert.equal((await anon('GET', `/auth/invite/${firstToken}`)).status, 404);
+  // setting a password by hand cancels the invitation
+  assert.equal((await alice('PUT', `/users/${inv2.body.id}`, { password: 'erin-password' })).body.invited, false);
+  // the interface language is stored on the account
+  assert.equal((await alice('PUT', '/account', { lang: 'pl' })).body.user.lang, 'pl');
+  assert.equal((await alice('PUT', '/account', { lang: 'xx' })).body.user.lang, 'pl');
+
   // sign-out
   assert.equal((await alice('POST', '/auth/logout')).status, 200);
   assert.equal((await alice('GET', '/dashboard')).status, 401);
+});
+
+test('e-mail language: recipients with an account get their own language, others the default', () => {
+  const settings = { smtp: { to: 'a@x.test, Bob <b@x.test>; c@x.test' }, notify: { lang: 'pl' } };
+  const users = [{ email: 'A@x.test', lang: 'de' }, { email: 'b@x.test', lang: 'en' }, { email: 'nobody@x.test', lang: 'de' }];
+  assert.deepEqual(recipientsByLang(settings, users), [['de', 'a@x.test'], ['en', 'Bob <b@x.test>'], ['pl', 'c@x.test']]);
+  assert.deepEqual(recipientsByLang({ smtp: { to: '' }, notify: { lang: 'pl' } }, users), []);
 });

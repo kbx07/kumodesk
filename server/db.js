@@ -164,6 +164,9 @@ export function openDb(file) {
   addColumn('users', 'totp_last', 'INTEGER NOT NULL DEFAULT -1');
   addColumn('users', 'totp_required', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('users', 'totp_nagged', 'INTEGER NOT NULL DEFAULT 0');
+  // interface language (used for e-mails) and pending invitations
+  addColumn('users', 'lang', 'TEXT');
+  db.exec('CREATE TABLE IF NOT EXISTS invites (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL)');
   addColumn('users', 'recovery', "TEXT NOT NULL DEFAULT '[]'");
   db.exec(`
     CREATE TABLE IF NOT EXISTS trusted_devices (
@@ -439,20 +442,22 @@ export const countAlertsAfter = (id, userId) => db.prepare('SELECT COUNT(*) n FR
 export const listAlerts = (limit, userId) => db.prepare('SELECT * FROM alerts WHERE user_id IS NULL OR user_id = ? ORDER BY id DESC LIMIT ?').all(userId, limit);
 
 // ---------- users and sessions ----------
-const pubUser = (u) => u && ({ id: u.id, username: u.username, role: u.role, email: u.email || '', created: u.created,
+const USERS = 'SELECT u.*, EXISTS(SELECT 1 FROM invites i WHERE i.user_id = u.id) AS invited FROM users u';
+const pubUser = (u) => u && ({ id: u.id, username: u.username, role: u.role, email: u.email || '', created: u.created, lang: u.lang || null, invited: !!u.invited,
   twofa: { enabled: !!u.totp_enabled, required: !!u.totp_required, recoveryLeft: safeJson(u.recovery, []).length } });
 export const countUsers = () => db.prepare('SELECT COUNT(*) n FROM users').get().n;
 export const countAdmins = () => db.prepare("SELECT COUNT(*) n FROM users WHERE role = 'admin'").get().n;
-export const listUsers = () => db.prepare('SELECT * FROM users ORDER BY username').all().map(pubUser);
-export const getUser = (id) => pubUser(db.prepare('SELECT * FROM users WHERE id = ?').get(Number(id)));
+export const listUsers = () => db.prepare(`${USERS} ORDER BY u.username`).all().map(pubUser);
+export const getUser = (id) => pubUser(db.prepare(`${USERS} WHERE u.id = ?`).get(Number(id)));
 export const getUserAuth = (username) => db.prepare('SELECT * FROM users WHERE username = ?').get(String(username));
 export const getUserAuthById = (id) => db.prepare('SELECT * FROM users WHERE id = ?').get(Number(id));
-export function createUser({ username, pass_hash, role, email }) {
+export function createUser({ username, pass_hash, role, email, lang }) {
   const first = countUsers() === 0;
   // new accounts must set up two-factor authentication
   const id = Number(db.prepare('INSERT INTO users (username, pass_hash, role, email, created, totp_required) VALUES (?,?,?,?,?,1)')
     .run(username, pass_hash, role, email || null, new Date().toISOString()).lastInsertRowid);
   // a new account does not get notifications from before it existed
+  if (lang) db.prepare('UPDATE users SET lang = ? WHERE id = ?').run(lang, id);
   if (!first) db.prepare('UPDATE users SET bell_seen = (SELECT COALESCE(MAX(id), 0) FROM alerts) WHERE id = ?').run(id);
   if (first) {
     // data from before accounts existed (positions, trades, capital, limits) goes to the first administrator
@@ -463,15 +468,23 @@ export function createUser({ username, pass_hash, role, email }) {
   }
   return getUser(id);
 }
-export function updateUser(id, { role, email, pass_hash }) {
+export function updateUser(id, { role, email, pass_hash, lang }) {
+  if (lang) db.prepare('UPDATE users SET lang = ? WHERE id = ?').run(lang, id);
   if (role != null) db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, id);
   if (email !== undefined) db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email || null, id);
-  if (pass_hash) { db.prepare('UPDATE users SET pass_hash = ? WHERE id = ?').run(pass_hash, id); db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id); }
+  if (pass_hash) { db.prepare('UPDATE users SET pass_hash = ? WHERE id = ?').run(pass_hash, id); db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id); db.prepare('DELETE FROM invites WHERE user_id = ?').run(id); }
   return getUser(id);
 }
+/** Stores a new invitation for the account (replacing older ones); only the token's hash is kept. */
+export function createInvite(userId, tokenHash, expires) {
+  db.prepare('DELETE FROM invites WHERE user_id = ?').run(userId);
+  db.prepare('INSERT INTO invites (token_hash, user_id, expires) VALUES (?,?,?)').run(tokenHash, userId, expires);
+}
+export const getInvite = (tokenHash) => db.prepare('SELECT * FROM invites WHERE token_hash = ? AND expires > ?').get(String(tokenHash), Date.now());
 export function deleteUser(id) {
   for (const t of ['positions', 'trades']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(id);
   db.prepare('DELETE FROM alerts WHERE user_id = ?').run(id);
+  db.prepare('DELETE FROM invites WHERE user_id = ?').run(id);
   db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id);
   db.prepare('DELETE FROM trusted_devices WHERE user_id = ?').run(id);
   db.prepare('DELETE FROM portfolio_shares WHERE owner_id = ? OR viewer_id = ?').run(id, id);
