@@ -450,6 +450,14 @@ export const countAdmins = () => db.prepare("SELECT COUNT(*) n FROM users WHERE 
 export const listUsers = () => db.prepare(`${USERS} ORDER BY u.username`).all().map(pubUser);
 export const getUser = (id) => pubUser(db.prepare(`${USERS} WHERE u.id = ?`).get(Number(id)));
 export const getUserAuth = (username) => db.prepare('SELECT * FROM users WHERE username = ?').get(String(username));
+/** Account for signing in: by username, or by e-mail address when exactly one account uses it. */
+export function getUserByLogin(login) {
+  const v = String(login || '').trim();
+  const u = getUserAuth(v);
+  if (u || !v.includes('@')) return u;
+  const rows = db.prepare('SELECT * FROM users WHERE email = ? COLLATE NOCASE').all(v);
+  return rows.length === 1 ? rows[0] : undefined;
+}
 export const getUserAuthById = (id) => db.prepare('SELECT * FROM users WHERE id = ?').get(Number(id));
 export function createUser({ username, pass_hash, role, email, lang }) {
   const first = countUsers() === 0;
@@ -468,7 +476,8 @@ export function createUser({ username, pass_hash, role, email, lang }) {
   }
   return getUser(id);
 }
-export function updateUser(id, { role, email, pass_hash, lang }) {
+export function updateUser(id, { role, email, pass_hash, lang, username }) {
+  if (username) db.prepare('UPDATE users SET username = ? WHERE id = ?').run(username, id);
   if (lang) db.prepare('UPDATE users SET lang = ? WHERE id = ?').run(lang, id);
   if (role != null) db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, id);
   if (email !== undefined) db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email || null, id);

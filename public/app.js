@@ -1189,6 +1189,7 @@ function viewHelp() {
 }
 
 // ---------- SIGN-IN ----------
+let prefillLogin = '';
 async function showAuth() {
   let st;
   try { st = await api('/auth/state'); } catch { st = { setup: false, user: null, appearance: lookCfg }; }
@@ -1199,7 +1200,8 @@ async function showAuth() {
   const inviteToken = /^#\/invite\/([\w-]{20,})$/.exec(location.hash)?.[1];
   if (inviteToken && !setup) return showInvite(inviteToken, st);
   const err = h('div', { class: 'err small', role: 'alert' });
-  const user = h('input', { type: 'text', name: 'username', autocomplete: 'username', required: true, minlength: 3, maxlength: 32, autofocus: true });
+  const user = h('input', { type: 'text', name: 'username', autocomplete: 'username', required: true, minlength: setup ? 3 : 1, maxlength: setup ? 32 : 200, autofocus: true, value: prefillLogin });
+  prefillLogin = '';
   const pass = h('input', { type: 'password', name: 'password', autocomplete: setup ? 'new-password' : 'current-password', required: true, minlength: setup ? 8 : 1 });
   const pass2 = h('input', { type: 'password', name: 'password2', autocomplete: 'new-password', required: true, minlength: 8 });
   const email = h('input', { type: 'email', name: 'email', autocomplete: 'email' });
@@ -1209,13 +1211,21 @@ async function showAuth() {
   const codeBox = h('div', { hidden: true, style: 'display:grid;gap:10px' }, h('label', null, T('twofa.code'), code, h('span', { class: 'muted' }, T('twofa.code.hint'))),
     h('label', { class: 'inline-check' }, remember, T('twofa.remember')));
   let needCode = false;
+  const userL = h('label', null, T(setup ? 'auth.username' : 'auth.login'), user), passL = h('label', null, T('auth.password'), pass);
+  const title = h('h1', null, T(setup ? 'auth.setup.title' : 'auth.login.title')), lead = h('p', { class: 'muted' }, T(setup ? 'auth.setup.sub' : 'auth.login.sub'));
+  // step 2: only the code from the authenticator app
+  const back = h('button', { type: 'button', class: 'btn', hidden: true, onclick: () => showAuth() }, T('auth.back'));
+  const stepTwo = () => {
+    needCode = true; userL.hidden = true; passL.hidden = true; codeBox.hidden = false; back.hidden = false; code.required = true;
+    title.textContent = T('twofa.title'); lead.textContent = T('auth.step2.sub'); btn.textContent = T('auth.submit.verify');
+    code.focus();
+  };
   const form = h('form', { class: 'authform' },
-    h('label', null, T('auth.username'), user),
-    h('label', null, T('auth.password'), pass),
+    userL, passL,
     codeBox,
     setup ? h('label', null, T('auth.password2'), pass2) : null,
     setup ? h('label', null, T('auth.email'), email, h('span', { class: 'muted' }, T('auth.email.hint'))) : null,
-    err, btn,
+    err, btn, back,
     setup ? h('p', { class: 'hint' }, T('auth.rules')) : null);
   form.onsubmit = async (e) => {
     e.preventDefault(); err.textContent = '';
@@ -1223,7 +1233,7 @@ async function showAuth() {
     btn.disabled = true;
     try {
       const r = await api(setup ? '/auth/setup' : '/auth/login', { method: 'POST', body: { username: user.value.trim(), password: pass.value, email: email.value.trim(), ...(needCode ? { code: code.value.trim(), remember: remember.checked } : {}) } });
-      if (r.twofa) { needCode = true; codeBox.hidden = false; code.required = true; code.focus(); btn.disabled = false; return; }
+      if (r.twofa) { stepTwo(); btn.disabled = false; return; }
       me = r.user;
       if (needEnrol()) { showEnrol(); btn.disabled = false; return; }
       $('#auth').hidden = true; document.body.classList.remove('locked');
@@ -1239,8 +1249,7 @@ async function showAuth() {
     h('div', { class: 'authbg', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')),
     h('div', { class: 'authcard' },
       h('div', { class: 'authbrand', html: '<svg viewBox="0 0 32 32" width="34" height="34" aria-hidden="true"><path d="M3 21c5-9 9 2 13-6s7-6 13-8" fill="none" stroke="var(--line-tenkan)" stroke-width="3" stroke-linecap="round"/><path d="M3 27c6-5 10 1 14-3s7-3 12-5" fill="none" stroke="var(--line-kijun)" stroke-width="3" stroke-linecap="round"/></svg><span>KumoDesk</span>' }),
-      h('h1', null, T(setup ? 'auth.setup.title' : 'auth.login.title')),
-      h('p', { class: 'muted' }, T(setup ? 'auth.setup.sub' : 'auth.login.sub')),
+      title, lead,
       form,
       h('div', { class: 'authfoot' }, langSel, h('span', { class: 'muted small' }, st.version ? `v${st.version}` : ''))));
   el.hidden = false; document.body.classList.add('locked');
@@ -1266,26 +1275,28 @@ async function showInvite(token, st) {
     return false;
   }
   const err = h('div', { class: 'err small', role: 'alert' });
+  const user = h('input', { type: 'text', name: 'username', autocomplete: 'username', value: info.username, required: true, minlength: 3, maxlength: 32 });
+  const email = h('input', { type: 'email', name: 'email', autocomplete: 'email', value: info.email || '', required: true });
   const pass = h('input', { type: 'password', name: 'password', autocomplete: 'new-password', required: true, minlength: 8 });
   const pass2 = h('input', { type: 'password', name: 'password2', autocomplete: 'new-password', required: true, minlength: 8 });
   const btn = h('button', { class: 'btn primary' }, T('invite.submit'));
   const form = h('form', { class: 'authform' },
-    h('label', null, T('auth.username'), h('input', { type: 'text', name: 'username', autocomplete: 'username', value: info.username, readonly: true })),
+    h('label', null, T('auth.username'), user), h('label', null, T('acc.email'), email),
     h('label', null, T('auth.password'), pass), h('label', null, T('auth.password2'), pass2), err, btn, h('p', { class: 'hint' }, T('invite.rules')));
   form.onsubmit = async (e) => {
     e.preventDefault(); err.textContent = '';
     if (pass.value !== pass2.value) { err.textContent = T('auth.mismatch'); return; }
     btn.disabled = true;
     try {
-      const r = await api(`/auth/invite/${token}`, { method: 'POST', body: { password: pass.value, lang } });
-      me = r.user; leave();
-      if (needEnrol()) { showEnrol(); return; }
-      el.hidden = true; document.body.classList.remove('locked');
-      startApp();
+      const r = await api(`/auth/invite/${token}`, { method: 'POST', body: { username: user.value.trim(), email: email.value.trim(), password: pass.value, lang } });
+      // saved: confirm, then back to the start page to sign in
+      leave();
+      card(h('h1', null, T('invite.done.title')), h('p', { role: 'status' }, T('invite.done.text', { name: r.username })),
+        h('button', { class: 'btn primary', onclick: () => { prefillLogin = r.username; showAuth(); } }, T('auth.submit.login')));
     } catch (ex) { err.textContent = TE(ex.message); btn.disabled = false; }
   };
   card(h('h1', null, T('invite.title')), h('p', { class: 'muted' }, T('invite.sub', { name: info.username })), form);
-  setTimeout(() => pass.focus(), 30);
+  setTimeout(() => (email.value ? pass : email).focus(), 30);
   return false;
 }
 const needEnrol = () => !!me && me.twofa?.required && !me.twofa?.enabled;

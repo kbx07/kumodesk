@@ -89,7 +89,7 @@ app.post('/api/auth/login', wrap((req, res) => {
   const { username, password, code, remember } = req.body || {};
   const key = loginKey(req, username);
   if (!auth.loginAllowed(key)) throw Object.assign(new Error('err.loginLocked'), { status: 429 });
-  const u = db.getUserAuth(String(username || ''));
+  const u = db.getUserByLogin(username);
   // verify the password even for an unknown username so response time does not reveal whether the account exists
   const ok = auth.verifyPassword(String(password || ''), u ? u.pass_hash : 'scrypt$00$00') && !!u;
   if (!ok) { auth.loginFailed(key); log(req, 'auth', 'auth.loginFailed', { username: String(username || '').slice(0, 40) }, 'warn', u ? u.id : null); throw Object.assign(new Error('err.loginBad'), { status: 401 }); }
@@ -239,14 +239,20 @@ app.post('/api/users/:id/invite', admin, wrap(async (req, res) => {
 }));
 // the invited person: check the link, then choose a password (public – the token is the proof)
 const invited = (req) => { const inv = db.getInvite(tokenHash(req.params.token)); const u = inv && db.getUser(inv.user_id); if (!u) throw Object.assign(new Error('err.inviteInvalid'), { status: 404 }); return u; };
-app.get('/api/auth/invite/:token', wrap((req, res) => res.json({ username: invited(req).username })));
+app.get('/api/auth/invite/:token', wrap((req, res) => { const u = invited(req); res.json({ username: u.username, email: u.email }); }));
 app.post('/api/auth/invite/:token', wrap((req, res) => {
-  const u = invited(req);
-  if (!auth.validPassword(req.body?.password)) throw bad('err.password');
-  db.updateUser(u.id, { pass_hash: auth.hashPassword(req.body.password), ...(LANGS.includes(req.body?.lang) ? { lang: req.body.lang } : {}) }); // also removes the invitation
-  auth.startSession(req, res, u.id);
+  const u = invited(req), b = req.body || {};
+  // the person may correct the username and must confirm an e-mail address
+  const username = b.username === undefined ? u.username : String(b.username).trim();
+  if (!auth.validUsername(username)) throw bad('err.username');
+  const other = db.getUserAuth(username);
+  if (other && other.id !== u.id) throw bad('err.userExists');
+  const email = b.email === undefined ? u.email : cleanEmail(b.email);
+  if (!email) throw bad('err.emailRequired');
+  if (!auth.validPassword(b.password)) throw bad('err.password');
+  db.updateUser(u.id, { username, email, pass_hash: auth.hashPassword(b.password), ...(LANGS.includes(b.lang) ? { lang: b.lang } : {}) }); // also removes the invitation
   log(req, 'auth', 'auth.inviteAccepted', {}, 'info', u.id);
-  res.json({ user: db.getUser(u.id) });
+  res.json({ ok: true, username }); // no session: the person signs in on the start page next
 }));
 app.put('/api/users/:id', admin, wrap((req, res) => {
   const id = Number(req.params.id), cur = db.getUser(id);

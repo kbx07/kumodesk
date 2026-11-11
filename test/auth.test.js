@@ -268,12 +268,20 @@ test('server: setup, sign-in, roles, portfolio isolation, sharing, messages', as
   assert.equal((await dave('GET', '/auth/invite/not-a-real-token-0000000000')).status, 404);
   assert.equal((await dave('GET', `/auth/invite/${token}`)).body.username, 'dave');
   assert.equal((await dave('POST', `/auth/invite/${token}`, { password: 'short' })).status, 400);
-  const accepted = await dave('POST', `/auth/invite/${token}`, { password: 'dave-password' });
-  assert.equal(accepted.status, 200); assert.equal(accepted.body.user.invited, false); assert.equal(accepted.body.user.twofa.required, true);
+  assert.equal((await dave('POST', `/auth/invite/${token}`, { username: 'bob', email: 'dave@example.test', password: 'dave-password' })).body.error, 'err.userExists');
+  assert.equal((await dave('POST', `/auth/invite/${token}`, { username: 'david', email: '', password: 'dave-password' })).body.error, 'err.emailRequired');
+  // the person corrects the username and e-mail, sets a password – and is not signed in yet
+  const accepted = await dave('POST', `/auth/invite/${token}`, { username: 'david', email: 'david@example.test', password: 'dave-password' });
+  assert.equal(accepted.status, 200); assert.equal(accepted.body.username, 'david');
+  assert.equal((await dave('GET', '/dashboard')).status, 401);
+  // sign-in works with the username or the e-mail address; the first sign-in leads to 2FA setup
+  const byMail = await dave('POST', '/auth/login', { username: 'David@Example.test', password: 'dave-password' });
+  assert.equal(byMail.status, 200); assert.equal(byMail.body.user.username, 'david'); assert.equal(byMail.body.user.invited, false); assert.equal(byMail.body.user.twofa.required, true);
   assert.equal((await dave('GET', '/dashboard')).status, 403);                       // signed in, but 2FA comes first
+  assert.equal((await client()('POST', '/auth/login', { username: 'nobody@example.test', password: 'dave-password' })).status, 401);
   assert.equal((await anon('GET', `/auth/invite/${token}`)).status, 404);            // the link works once
   assert.equal((await alice('POST', `/users/${inv.body.id}/invite`)).body.error, 'err.inviteDone');
-  assert.equal((await client()('POST', '/auth/login', { username: 'dave', password: 'dave-password' })).status, 200);
+  assert.equal((await client()('POST', '/auth/login', { username: 'david', password: 'dave-password' })).status, 200);
   // a resent invitation replaces the previous link
   const inv2 = await alice('POST', '/users', { username: 'erin', email: 'erin@example.test', invite: true });
   const firstToken = /#\/invite\/([\w-]+)/.exec(mails[1].replace(/=\r\n/g, ''))[1];

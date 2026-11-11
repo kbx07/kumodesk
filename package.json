@@ -1,6 +1,6 @@
 {
   "name": "kumodesk",
-  "version": "2.7.0",
+  "version": "2.8.0",
   "description": "Ichimoku D1 decision desk: currency strength, market regime, setup ranking, e-mail alerts. Never places orders.",
   "type": "module",
   "main": "server/index.js",
