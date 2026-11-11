@@ -139,6 +139,16 @@ export function openDb(file) {
   `);
   addColumn('trades', 'user_id', 'INTEGER');
   seed();
+  // jednorazowo: waluta rachunku PLN -> EUR (na prośbę właściciela instalacji); kwoty zostają bez zmian
+  if (!getMeta('currencyEur')) {
+    for (const u of db.prepare('SELECT id, settings FROM users').all()) {
+      const st = safeJson(u.settings, {});
+      if (st.capital?.currency === 'PLN') { st.capital.currency = 'EUR'; db.prepare('UPDATE users SET settings = ? WHERE id = ?').run(JSON.stringify(st), u.id); }
+    }
+    const g = db.prepare("SELECT value FROM settings WHERE key = 'capital'").get();
+    if (g) { const c = safeJson(g.value, {}); if (c.currency === 'PLN') { c.currency = 'EUR'; db.prepare("UPDATE settings SET value = ? WHERE key = 'capital'").run(JSON.stringify(c)); } }
+    setMeta('currencyEur', 1);
+  }
   return db;
 }
 
@@ -209,6 +219,9 @@ export function getSettings(userId = null) {
   }
   return merged;
 }
+
+/** Zastępuje cały klucz ustawień (bez scalania) – potrzebne przy usuwaniu pól. */
+export const replaceSetting = (key, value) => db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, JSON.stringify(value));
 
 export function saveUserSettings(userId, patch) {
   const u = db.prepare('SELECT settings FROM users WHERE id = ?').get(userId);

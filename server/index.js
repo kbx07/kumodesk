@@ -1,6 +1,7 @@
 // KumoDesk – serwer HTTP (API + pliki statyczne).
 import express from 'express';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as db from './db.js';
 import { PROVIDERS, fetchInstrumentQuote, fetchInstrument, fetchInstrumentH4 } from './providers/index.js';
@@ -17,7 +18,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3003;
 const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 
 db.openDb(path.join(DATA_DIR, 'kumodesk.db'));
 
@@ -38,6 +39,17 @@ const CLASSES = ['fx', 'metal', 'index', 'commodity', 'crypto', 'stock', 'etf', 
 
 const LOGIN_BGS = ['aurora', 'kumo', 'grid', 'mesh', 'plain'];
 const APP_BGS = ['default', 'aurora', 'grid', 'midnight'];
+const THEMES = ['normal', 'anime', 'cosplay', 'custom'];
+const THEME_SLOTS = ['left', 'right', 'bg'];
+const THEME_DIR = path.join(DATA_DIR, 'theme');
+/** Rozpoznaje obraz po pierwszych bajtach – nie ufamy nagłówkowi ani nazwie pliku. */
+function sniffImage(buf) {
+  if (buf.length > 8 && buf[0] === 0x89 && buf.toString('latin1', 1, 4) === 'PNG') return 'image/png';
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.length > 12 && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  if (buf.length > 6 && /^GIF8[79]a$/.test(buf.toString('latin1', 0, 6))) return 'image/gif';
+  return null;
+}
 
 /** Ustawienia widoczne dla użytkownika: osobiste zawsze, dane serwera (SMTP, klucze) tylko dla administratora. */
 function publicSettings(user) {
@@ -73,6 +85,13 @@ app.post('/api/auth/login', wrap((req, res) => {
   auth.loginOk(key);
   auth.startSession(req, res, u.id);
   res.json({ user: db.getUser(u.id) });
+}));
+// obrazki własnego motywu – widoczne także na ekranie logowania
+app.get('/api/auth/theme/:slot', wrap((req, res) => {
+  const slot = req.params.slot, meta = appearance().custom?.[slot];
+  if (!THEME_SLOTS.includes(slot) || !meta) return res.status(404).end();
+  res.setHeader('Content-Type', meta.type); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Cache-Control', 'private, max-age=86400');
+  fs.createReadStream(path.join(THEME_DIR, slot)).on('error', () => res.status(404).end()).pipe(res);
 }));
 app.post('/api/auth/logout', wrap((req, res) => { auth.endSession(req, res); res.json({ ok: true }); }));
 
@@ -119,6 +138,28 @@ app.delete('/api/users/:id', admin, wrap((req, res) => {
   if (cur.role === 'admin' && db.countAdmins() <= 1) throw bad('err.lastAdmin');
   db.deleteUser(id); invalidate();
   res.json({ ok: true });
+}));
+
+// ---------- własny motyw: wgrywanie obrazków ----------
+app.put('/api/theme/:slot', admin, express.raw({ type: () => true, limit: '5mb' }), wrap((req, res) => {
+  const slot = req.params.slot;
+  if (!THEME_SLOTS.includes(slot)) throw bad('err.background');
+  const type = Buffer.isBuffer(req.body) ? sniffImage(req.body) : null;
+  if (!type) throw bad('err.imageType');
+  fs.mkdirSync(THEME_DIR, { recursive: true });
+  fs.writeFileSync(path.join(THEME_DIR, slot), req.body);
+  const custom = { ...(appearance().custom || {}), [slot]: { type, v: Date.now() } };
+  db.saveSettings({ appearance: { custom } });
+  res.json({ appearance: appearance() });
+}));
+app.delete('/api/theme/:slot', admin, wrap((req, res) => {
+  const slot = req.params.slot;
+  if (!THEME_SLOTS.includes(slot)) throw bad('err.background');
+  fs.rmSync(path.join(THEME_DIR, slot), { force: true });
+  const custom = { ...(appearance().custom || {}) }; delete custom[slot];
+  const all = db.getSettings(); all.appearance.custom = custom;
+  db.replaceSetting('appearance', all.appearance);
+  res.json({ appearance: appearance() });
 }));
 
 // ---------- udostępnianie portfela ----------
@@ -285,7 +326,7 @@ app.get('/api/alerts', wrap((req, res) => {
 app.get('/api/settings', wrap((req, res) => {
   res.json({
     settings: publicSettings(req.user),
-    loginBgs: LOGIN_BGS, appBgs: APP_BGS,
+    loginBgs: LOGIN_BGS, appBgs: APP_BGS, themes: THEMES,
     providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, name: p.name, needsKey: p.needsKey })),
     classes: CLASSES,
   });
@@ -301,6 +342,8 @@ app.put('/api/settings', wrap((req, res) => {
   if (patch.appearance) {
     if (patch.appearance.loginBg != null && !LOGIN_BGS.includes(patch.appearance.loginBg)) throw bad('err.background');
     if (patch.appearance.appBg != null && !APP_BGS.includes(patch.appearance.appBg)) throw bad('err.background');
+    if (patch.appearance.theme != null && !THEMES.includes(patch.appearance.theme)) throw bad('err.background');
+    delete patch.appearance.custom; // obrazki zmienia się tylko przez wgranie pliku
   }
   if (patch.risk) for (const k of ['maxTotal', 'maxCurrency', 'maxPosition']) if (patch.risk[k] != null) { const v = Number(patch.risk[k]); if (!(v > 0 && v <= 100)) throw bad('err.riskPct'); patch.risk[k] = v; }
   if (patch.smtp) {

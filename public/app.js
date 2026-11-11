@@ -41,7 +41,29 @@ async function api(path, opts = {}) {
   return data;
 }
 let me = null;            // zalogowany użytkownik
-let lookCfg = { loginBg: 'aurora', appBg: 'default' };
+let lookCfg = { theme: 'normal', loginBg: 'aurora', appBg: 'default', custom: {} };
+// Postaci boczne motywów: proste sylwetki w stylu wycinanki (ubrane, bez szczegółów).
+const FIG = {
+  anime: '<svg viewBox="0 0 200 420" xmlns="http://www.w3.org/2000/svg"><g fill="currentColor"><path d="M62 70c-16 30-22 78-10 120l14-4c-6-34-4-70 6-98zM138 70c16 30 22 78 10 120l-14-4c6-34 4-70-6-98z" opacity=".75"/><circle cx="100" cy="62" r="34"/><path d="M66 58c2-30 22-44 36-44s34 12 34 44c-10-16-22-22-36-22s-26 8-34 22z" opacity=".55"/><path d="M78 100h44l14 96H64z"/><path d="M58 196h84l22 84H36z" opacity=".85"/><path d="M74 280h20l-4 118H78zM106 280h20l-4 118h-12z"/><path d="M70 398h26v12H66zM104 398h26l4 12h-30z"/><path d="M124 112l34 46-10 8-30-36zM76 112l-30 52 10 6 26-40z" opacity=".9"/></g><path d="M150 150l22-30 6 4-20 32z" fill="currentColor" opacity=".6"/></svg>',
+  cosplay: '<svg viewBox="0 0 200 420" xmlns="http://www.w3.org/2000/svg"><g fill="currentColor"><path d="M70 36l-6-30 28 18zM130 36l6-30-28 18z"/><circle cx="100" cy="62" r="32"/><path d="M68 64c0-22 14-40 32-40s32 18 32 40c-8-10-20-16-32-16s-24 6-32 16z" opacity=".55"/><path d="M60 100h80l40 190c-26 10-54-6-80-6s-54 16-80 6z" opacity=".45"/><path d="M78 100h44l10 100H68z"/><path d="M68 200h64l10 70H58z" opacity=".9"/><path d="M76 270h18l-2 126H80zM106 270h18l-4 126h-12z"/><path d="M68 396h28v14H64zM104 396h28l4 14h-32z"/><path d="M124 112l40-34 6 8-34 44z" opacity=".9"/></g><path d="M166 30l6 190h-6z" fill="currentColor"/><path d="M169 6l12 20-12 14-12-14z" fill="currentColor" opacity=".8"/></svg>',
+};
+/** Ustawia motyw, tło i dekoracje (spadające płatki, iskry, napisy mangi, postaci boczne). */
+function applyLook() {
+  const th = lookCfg.theme || 'normal';
+  document.body.dataset.theme = th; document.body.dataset.bg = th === 'normal' ? lookCfg.appBg : 'theme';
+  const d = $('#decor'); d.replaceChildren();
+  const img = (slot) => (lookCfg.custom?.[slot] ? `/api/auth/theme/${slot}?v=${lookCfg.custom[slot].v}` : null);
+  d.style.backgroundImage = th === 'custom' && img('bg') ? `url(${img('bg')})` : '';
+  if (th === 'anime' || th === 'cosplay') {
+    d.append(h('div', { class: 'fig left', html: FIG[th] }), h('div', { class: 'fig right', html: FIG[th] }));
+    const bits = th === 'anime' ? ['petal', 'petal', 'petal', 'petal', 'petal', 'petal', 'spark', 'spark', 'word:ドキドキ', 'word:キラキラ', 'petal', 'petal']
+      : ['spark', 'spark', 'spark', 'star', 'star', 'word:ゴゴゴ', 'word:シャキーン', 'spark', 'star', 'spark'];
+    bits.forEach((b, i) => { const [kind, text] = b.split(':'); d.append(h('i', { class: `bit ${kind}`, style: `left:${(i * 83 + 7) % 100}%;animation-delay:-${(i * 2.7) % 19}s;animation-duration:${14 + (i * 5) % 13}s` }, text || '')); });
+  } else if (th === 'custom') {
+    if (img('left')) d.append(h('img', { class: 'fig left', src: img('left'), alt: '' }));
+    if (img('right')) d.append(h('img', { class: 'fig right', src: img('right'), alt: '' }));
+  }
+}
 const isAdmin = () => me?.role === 'admin';
 let toastTimer;
 function toast(msg, badTone = false) {
@@ -151,7 +173,7 @@ function openDialog(title, form, onSave, { hint, saveLabel, cls } = {}) {
   document.body.append(dlg); dlg.showModal();
   return dlg;
 }
-let capitalCfg = { start: 0, currency: 'PLN', defaultRisk: 1 };
+let capitalCfg = { start: 0, currency: 'EUR', defaultRisk: 1 };
 const money = (v, d = 2) => (v == null ? '–' : `${Number(v).toLocaleString(lang, { minimumFractionDigits: d, maximumFractionDigits: d })} ${capitalCfg.currency}`);
 
 /** „Zlecenie” w stylu brokera – ale tylko wpis na listę otwartych pozycji. */
@@ -632,7 +654,7 @@ async function viewHistory() {
 let settingsTab = 'general';
 async function viewSettings() {
   const root = h('div', null, h('div', { class: 'muted' }, T('loading')));
-  const [{ settings: s, providers, classes, loginBgs, appBgs }, groups, instruments] = await Promise.all([api('/settings'), api('/groups'), api('/instruments')]);
+  const [{ settings: s, providers, classes, loginBgs, appBgs, themes }, groups, instruments] = await Promise.all([api('/settings'), api('/groups'), api('/instruments')]);
   usersCache = null;
   const save = async (patch, msg = T('saved')) => {
     try { await api('/settings', { method: 'PUT', body: patch }); toast(msg); await loadMarket(); return true; }
@@ -663,15 +685,30 @@ async function viewSettings() {
         try { const r = await api('/account', { method: 'PUT', body: { email: d.email, ...(d.password ? { current: d.current, password: d.password } : {}) } }); me = r.user; toast(T('saved')); render(); }
         catch (ex) { toast(TE(ex.message), true); }
       };
-      // wygląd: tło ekranu logowania i tło aplikacji (dla wszystkich)
+      // wygląd: motyw, tła i obrazki własnego motywu (dla wszystkich)
       let look = null;
       if (isAdmin()) {
+        const ap = s.appearance;
         const preview = (kind, id) => h('span', { class: `bgprev ${kind}-${id}` }, kind === 'lbg' ? h('span', { class: 'authbg' }, h('i'), h('i'), h('i')) : null);
-        const radios = (name, list, cur, kind) => h('div', { class: 'bgpick' }, list.map((id) => h('label', { class: 'bgopt' }, h('input', { type: 'radio', name, value: id, checked: id === cur }), preview(kind, id), h('span', null, T('bg.' + id)))));
-        look = h('form', null, h('div', { class: 'k muted small', style: 'margin-bottom:6px' }, T('look.loginBg')), radios('loginBg', loginBgs, s.appearance.loginBg, 'lbg'),
-          h('div', { class: 'k muted small', style: 'margin:14px 0 6px' }, T('look.appBg')), radios('appBg', appBgs, s.appearance.appBg, 'abg'),
+        const radios = (name, list, cur, kind) => h('div', { class: 'bgpick' }, list.map((id) => h('label', { class: 'bgopt' }, h('input', { type: 'radio', name, value: id, checked: id === cur }), preview(kind, id), h('span', null, T((kind === 'thm' ? 'theme.' : 'bg.') + id)))));
+        const normalBox = h('div', { hidden: ap.theme !== 'normal' }, h('div', { class: 'k muted small', style: 'margin:14px 0 6px' }, T('look.loginBg')), radios('loginBg', loginBgs, ap.loginBg, 'lbg'),
+          h('div', { class: 'k muted small', style: 'margin:14px 0 6px' }, T('look.appBg')), radios('appBg', appBgs, ap.appBg, 'abg'));
+        const slotRow = (slot) => {
+          const has = ap.custom?.[slot];
+          const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', style: 'height:auto;padding:5px', onchange: async (e) => {
+            const fl = e.target.files[0]; if (!fl) return;
+            if (fl.size > 5 * 1024 * 1024) { toast(T('err.fileTooBig'), true); return; }
+            try { const r = await fetch(`/api/theme/${slot}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: fl }); const dd = await r.json(); if (!r.ok) throw new Error(dd.error); lookCfg = dd.appearance; applyLook(); toast(T('saved')); render(); }
+            catch (ex) { toast(TE(ex.message), true); }
+          } });
+          return h('label', null, T('theme.slot.' + slot), file, has ? h('span', { class: 'sharerow' }, h('img', { src: `/api/auth/theme/${slot}?v=${has.v}`, alt: '', style: 'height:44px;border-radius:4px' }),
+            h('button', { type: 'button', class: 'btn sm danger', onclick: async () => { const r = await api(`/theme/${slot}`, { method: 'DELETE' }); lookCfg = r.appearance; applyLook(); render(); } }, T('delete'))) : null);
+        };
+        const customBox = h('div', { class: 'form', style: 'margin-top:14px', hidden: ap.theme !== 'custom' }, slotRow('left'), slotRow('right'), slotRow('bg'), h('p', { class: 'hint wide' }, T('theme.custom.hint')));
+        look = h('form', null, h('div', { class: 'k muted small', style: 'margin-bottom:6px' }, T('theme.title')), radios('theme', themes, ap.theme, 'thm'), normalBox, customBox,
           h('div', { class: 'actions' }, h('button', { class: 'btn primary' }, T('save'))));
-        look.onsubmit = async (e) => { e.preventDefault(); const d = formData(look); if (await save({ appearance: d })) { lookCfg = d; document.body.dataset.bg = d.appBg; render(); } };
+        look.onchange = (e) => { if (e.target.name === 'theme') { normalBox.hidden = e.target.value !== 'normal'; customBox.hidden = e.target.value !== 'custom'; } };
+        look.onsubmit = async (e) => { e.preventDefault(); const d = formData(look); if (await save({ appearance: { theme: d.theme, loginBg: d.loginBg || ap.loginBg, appBg: d.appBg || ap.appBg } })) { lookCfg = { ...lookCfg, ...d }; applyLook(); render(); } };
       }
       return h('div', null,
         h('div', { class: 'card' }, h('h3', null, T('set.tab.general')), f, h('p', { class: 'hint' }, `KumoDesk ${status?.version || ''}`)),
@@ -974,7 +1011,7 @@ async function showAuth() {
   let st;
   try { st = await api('/auth/state'); } catch { st = { setup: false, user: null, appearance: lookCfg }; }
   lookCfg = st.appearance || lookCfg;
-  document.body.dataset.bg = lookCfg.appBg;
+  applyLook();
   if (st.user) { me = st.user; $('#auth').hidden = true; document.body.classList.remove('locked'); return true; }
   const setup = st.setup;
   const err = h('div', { class: 'err small', role: 'alert' });
@@ -1004,7 +1041,7 @@ async function showAuth() {
   const langSel = h('select', { class: 'lang', 'aria-label': 'Language', onchange: (e) => { langPref = e.target.value; store.set('kd.lang', langPref); lang = langPref === 'auto' ? detectLang(navigator.languages || [navigator.language]) : resolveLang(langPref); showAuth(); } },
     ['auto', 'pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === langPref }, l === 'auto' ? 'Auto' : t(l, 'lang.' + l))));
   const el = $('#auth');
-  el.className = `auth lbg-${lookCfg.loginBg}`;
+  el.className = `auth lbg-${(lookCfg.theme || 'normal') === 'normal' ? lookCfg.loginBg : 'theme'}`;
   el.replaceChildren(
     h('div', { class: 'authbg', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')),
     h('div', { class: 'authcard' },

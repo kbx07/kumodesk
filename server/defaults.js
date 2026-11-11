@@ -231,8 +231,8 @@ export const DEFAULT_SETTINGS = {
   sessions: { enabled: true },         // przepływ sesji z danych godzinowych par walutowych
   h4: { enabled: true, delay_min: 5 }, // analiza otwartych pozycji co 4 godziny
   risk: { maxTotal: 5, maxCurrency: 2.5, maxPosition: 1.5 },
-  capital: { start: 0, currency: 'PLN', defaultRisk: 1 },
-  appearance: { loginBg: 'aurora', appBg: 'default' },
+  capital: { start: 0, currency: 'EUR', defaultRisk: 1 },
+  appearance: { theme: 'normal', loginBg: 'aurora', appBg: 'default', custom: {} },
   notify: {
     mode: 'report',             // off | alerts | report
     minGrade: 'B',
