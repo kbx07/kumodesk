@@ -58,14 +58,17 @@ fi
 
 msg "Szukam szablonu Debiana"
 pveam update >/dev/null || true
-TEMPLATE="$(pveam available --section system | awk '{print $2}' | grep -E '^debian-13-standard' | sort -V | tail -n1 || true)"
-[[ -n "$TEMPLATE" ]] || TEMPLATE="$(pveam available --section system | awk '{print $2}' | grep -E '^debian-12-standard' | sort -V | tail -n1 || true)"
-[[ -n "$TEMPLATE" ]] || die "Brak szablonu Debian 12/13 na liście pveam."
+# Szablon musi pasować do architektury hosta (lista pveam zawiera też obrazy dla innych procesorów).
+ARCH="$(dpkg --print-architecture)"
+pick_template() { pveam available --section system | awk '{print $2}' | grep -E "^debian-$1-standard_.*_${ARCH}\.tar\." | sort -V | tail -n1 || true; }
+TEMPLATE="$(pick_template 13)"
+[[ -n "$TEMPLATE" ]] || TEMPLATE="$(pick_template 12)"
+[[ -n "$TEMPLATE" ]] || die "Brak szablonu Debian 12/13 dla architektury ${ARCH} na liście pveam."
 if ! pveam list "$TPL_STORAGE" | grep -q "$TEMPLATE"; then
   msg "Pobieram $TEMPLATE"
   pveam download "$TPL_STORAGE" "$TEMPLATE" >/dev/null
 fi
-ok "Szablon: $TEMPLATE"
+ok "Szablon: $TEMPLATE (${ARCH})"
 
 NET="name=eth0,bridge=$CT_BRIDGE,ip=$CT_IP"
 [[ "$CT_IP" != dhcp && -n "$CT_GW" ]] && NET+=",gw=$CT_GW"
@@ -74,10 +77,14 @@ msg "Tworzę kontener $CTID"
 pct create "$CTID" "$TPL_STORAGE:vztmpl/$TEMPLATE" \
   --hostname "$CT_HOSTNAME" --cores "$CT_CORES" --memory "$CT_RAM" --swap "$CT_SWAP" \
   --rootfs "$CT_STORAGE:$CT_DISK" --net0 "$NET" \
-  --unprivileged "$CT_UNPRIVILEGED" --features nesting=1 \
+  --arch "$ARCH" --unprivileged "$CT_UNPRIVILEGED" --features nesting=1 \
   --onboot 1 --ostype debian --tags kumodesk \
   --description "KumoDesk – panel decyzyjny Ichimoku D1 (port $APP_PORT). https://github.com/$REPO" >/dev/null
-pct start "$CTID"
+if ! pct start "$CTID"; then
+  # nieudany start: nie zostawiamy pustego kontenera
+  pct destroy "$CTID" --purge >/dev/null 2>&1 || true
+  die "Kontener $CTID nie wystartował i został usunięty. Szczegóły: journalctl -u pve-container@$CTID -n 50"
+fi
 ok "Kontener uruchomiony"
 
 msg "Czekam na sieć w kontenerze"
