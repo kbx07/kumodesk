@@ -245,6 +245,8 @@ Open positions show the current price and running result, refreshed every 20 sec
 
 On the first launch the app shows a form to create the **administrator account**; from then on everyone signs in with a username and password.
 
+- **Light / dark** — every user switches between automatic, light and dark in the profile menu (top right) or in Settings → General; the choice is remembered per device.
+- **Updates** — Settings → General shows the installed and the latest version. On the Proxmox / Debian install an administrator can update with one click (the app downloads the new code and restarts); for Docker the page shows the command to run on the host.
 - **Invitations** — when adding a user an administrator either types a password or, once SMTP is configured, sends an invitation by e-mail. The person gets a link valid for 7 days, chooses their own password and then sets up two-factor authentication. A pending invitation can be resent from the user list.
 - **E-mail language** — every user gets e-mails in the language of their own interface; addresses without an account use the default e-mail language from Settings → General.
 - **Roles** — administrators manage accounts (Settings → Users) and server settings (data sources, instruments, time groups, SMTP, appearance); there can be several. Users use the analysis and keep their own portfolio.

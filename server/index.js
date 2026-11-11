@@ -18,13 +18,13 @@ import QRCode from 'qrcode';
 import { vapidPublicKey, pushToUser } from './push.js';
 import { updateSignals, signalStats, signalsBusy } from './signals.js';
 import { t as tr } from '../public/i18n.js';
+import { VERSION, compareVersions, updateMode, checkLatest, updateState, runUpdate } from './update.js';
 import { isValidTimezone, hhmmToMinutes, nextRun, localParts, isBarClosed } from './timeutil.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3003;
 const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
-const VERSION = '2.5.0';
 
 db.openDb(path.join(DATA_DIR, 'kumodesk.db'));
 
@@ -165,6 +165,19 @@ app.get('/api/auth/theme/:slot', wrap((req, res) => {
   fs.createReadStream(path.join(THEME_DIR, slot)).on('error', () => res.status(404).end()).pipe(res);
 }));
 app.post('/api/auth/logout', wrap((req, res) => { const u = auth.currentUser(req); if (u) log(req, 'auth', 'auth.logout', {}, 'info', u.id); auth.endSession(req, res); res.json({ ok: true }); }));
+
+// ---------- version and update ----------
+app.get('/api/update', admin, wrap(async (req, res) => {
+  const c = await checkLatest(req.query.check === '1');
+  res.json({ current: VERSION, latest: c.latest, checked: c.checked, error: c.error, available: !!c.latest && compareVersions(c.latest, VERSION) > 0, mode: updateMode(), state: updateState });
+}));
+app.post('/api/update', admin, wrap((req, res) => {
+  if (updateMode() !== 'self') throw bad('err.updateManual');
+  if (updateState.running) throw Object.assign(new Error('err.updateBusy'), { status: 409 });
+  log(req, 'admin', 'admin.update', { from: VERSION });
+  runUpdate().catch((e) => { console.error('[update]', e.message); db.addLog({ category: 'system', level: 'error', code: 'system.updateError', params: { error: String(e.stderr || e.message).slice(-200) } }); });
+  res.status(202).json({ ok: true });
+}));
 
 // ---------- account and users ----------
 const LANGS = ['pl', 'de', 'en'];

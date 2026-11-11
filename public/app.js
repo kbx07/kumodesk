@@ -8,6 +8,16 @@ const store = { get: (k) => { try { return localStorage.getItem(k); } catch { re
 let langPref = store.get('kd.lang') || 'auto';
 let lang = langPref === 'auto' ? detectLang(navigator.languages || [navigator.language]) : resolveLang(langPref);
 const T = (k, p) => t(lang, k, p);
+// ---------- light / dark ----------
+let scheme = ['light', 'dark'].includes(store.get('kd.scheme')) ? store.get('kd.scheme') : 'auto';
+function setScheme(v) {
+  scheme = v; store.set('kd.scheme', v);
+  if (v === 'auto') delete document.documentElement.dataset.scheme; else document.documentElement.dataset.scheme = v;
+  renderUserMenu();
+  render(); // the chart reads its colours from CSS
+}
+const schemeSwitch = () => h('div', { class: 'seg', role: 'group', 'aria-label': T('set.scheme') },
+  ['auto', 'light', 'dark'].map((v) => h('button', { type: 'button', class: v === scheme ? 'on' : '', onclick: (e) => { e.stopPropagation(); setScheme(v); } }, T('scheme.' + v))));
 const TE = (msg) => (has(msg) ? T(msg) : msg); // translates error codes from the server
 
 // ---------- view mode: pro (full, default) or basic (simplified) ----------
@@ -716,6 +726,47 @@ function pushCard() {
   card.append(h('label', { class: 'inline-check' }, toggle, h('b', null, T('push.toggle'))), h('p', { class: 'hint' }, T('push.hint')), h('div', { class: 'actions', style: 'margin-top:8px' }, testBtn));
   return card;
 }
+/** Version card: installed and latest version, and the update itself where the app can do it. */
+function updateCard() {
+  const box = h('div', { class: 'card section-gap' }, h('h3', null, T('upd.title')), h('p', { class: 'muted' }, T('loading')));
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const draw = (d, busy) => {
+    const cmd = d.mode === 'docker' ? 'docker compose pull && docker compose up -d' : 'update';
+    box.replaceChildren(h('h3', null, T('upd.title')),
+      h('div', { class: 'kvrow' },
+        h('div', null, h('span', { class: 'muted small' }, T('upd.current')), h('b', null, d.current)),
+        h('div', null, h('span', { class: 'muted small' }, T('upd.latest')), h('b', null, d.latest || '–'),
+          d.latest ? h('span', { class: 'badge', style: 'margin-left:8px' }, h('span', { class: `dot ${d.available ? 'warn' : 'good'}` }), T(d.available ? 'upd.available' : 'upd.upToDate')) : null)),
+      d.error ? h('p', { class: 'err small' }, T('upd.checkFailed') + ' ' + d.error) : null,
+      busy ? h('p', { class: 'hint', role: 'status' }, busy) : h('div', { class: 'actions' },
+        h('button', { class: 'btn', onclick: () => load(true) }, T('upd.check')),
+        d.available && d.mode === 'self' ? h('button', { class: 'btn primary', onclick: () => start(d) }, T('upd.now', { v: d.latest })) : null),
+      d.state?.error && !busy ? h('p', { class: 'err small' }, T('upd.failed') + ' ' + d.state.error) : null,
+      d.available && d.mode !== 'self' ? h('p', { class: 'hint' }, T('upd.hint.' + d.mode), ' ', h('code', null, cmd)) : null,
+      h('p', { class: 'hint' }, d.checked ? T('upd.checked', { ts: fmtTs(d.checked) }) : ''));
+  };
+  const load = (force) => api('/update' + (force ? '?check=1' : '')).then((d) => { draw(d); if (d.state?.running) follow(d); }).catch((e) => box.replaceChildren(h('h3', null, T('upd.title')), h('p', { class: 'err' }, TE(e.message))));
+  // waits until the server comes back with a different version, then reloads the page
+  const follow = async (d) => {
+    for (let i = 0; i < 200; i++) {
+      await wait(2000);
+      let st = null;
+      try { st = await fetch('/api/auth/state').then((r) => r.json()); } catch { draw(d, T('upd.step.restart')); continue; }
+      if (st.version && st.version !== d.current) { location.reload(); return; }
+      let u = null;
+      try { u = await api('/update'); } catch { continue; }
+      if (u.state.error) { draw(u); return; }
+      draw(d, T('upd.step.' + (u.state.step || 'fetch')));
+    }
+  };
+  const start = async (d) => {
+    if (!confirm(T('upd.confirm', { v: d.latest }))) return;
+    try { await api('/update', { method: 'POST' }); draw(d, T('upd.step.fetch')); follow(d); }
+    catch (e) { toast(TE(e.message), true); }
+  };
+  load(false);
+  return box;
+}
 /** The 2FA section in "My account". */
 function twofaCard() {
   const tf = me.twofa || {};
@@ -748,6 +799,7 @@ async function viewSettings() {
     general() {
       const f = h('form', { class: 'form' },
         field(T('set.uiLang'), h('select', { name: 'ui' }, ['auto', 'pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === langPref }, l === 'auto' ? T('set.auto') : T('lang.' + l)))), T('set.uiLang.hint')),
+        h('div', { class: 'fieldlike' }, h('span', null, T('set.scheme')), schemeSwitch(), h('span', { class: 'muted' }, T('set.scheme.hint'))),
         isAdmin() ? field(T('set.mailLang'), h('select', { name: 'mail' }, ['pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === (s.notify.lang || lang) }, T('lang.' + l)))), T('set.mailLang.hint')) : null,
         h('div', null, h('button', { class: 'btn primary' }, T('save'))));
       f.onsubmit = async (e) => { e.preventDefault(); const d = formData(f); if (isAdmin()) await save({ notify: { lang: d.mail } }); setLang(d.ui); };
@@ -789,7 +841,8 @@ async function viewSettings() {
         look.onsubmit = async (e) => { e.preventDefault(); const d = formData(look); if (await save({ appearance: { theme: d.theme, loginBg: d.loginBg || ap.loginBg, appBg: d.appBg || ap.appBg } })) { lookCfg = { ...lookCfg, ...d }; applyLook(); render(); } };
       }
       return h('div', null,
-        h('div', { class: 'card' }, h('h3', null, T('set.tab.general')), f, h('p', { class: 'hint' }, `KumoDesk ${status?.version || ''}`)),
+        h('div', { class: 'card' }, h('h3', null, T('set.tab.general')), f),
+        isAdmin() ? updateCard() : h('p', { class: 'hint' }, `KumoDesk ${status?.version || ''}`),
         h('div', { class: 'card section-gap' }, h('h3', null, T('acc.title'), h('span', { class: 'muted small' }, T('user.role.' + me.role))), acc),
         twofaCard(),
         pushCard(),
@@ -1435,6 +1488,7 @@ function renderUserMenu() {
   $('#userbtn').replaceChildren(h('span', { class: 'avatar' }, me.username.slice(0, 1).toUpperCase()), h('span', { class: 'uname' }, me.username));
   $('#usermenu').replaceChildren(
     h('div', { class: 'bellhead' }, h('b', null, me.username), h('span', { class: 'muted small' }, T('user.role.' + me.role))),
+    h('div', { class: 'menurow' }, h('span', { class: 'muted small' }, T('set.scheme')), schemeSwitch()),
     h('a', { class: 'menuitem', href: '#/settings', onclick: () => { settingsTab = 'general'; $('#usermenu').hidden = true; } }, T('acc.title')),
     h('button', { class: 'menuitem', onclick: () => { $('#usermenu').hidden = true; logout(); } }, T('user.logout')));
 }

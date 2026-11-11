@@ -528,3 +528,35 @@ dialog.lightbox img { display: block; max-width: 90vw; max-height: 78vh; border-
 
 .live { font-size: 12.5px; display: inline-flex; align-items: center; gap: 2px; }
 .liveres { font-weight: 600; margin-left: 6px; }
+
+/* Light / dark chosen by the user (overrides the system preference). */
+:root[data-scheme="dark"] {
+  color-scheme: dark;
+  --page: #101113; --surface: #1a1b1e; --surface-2: #232529; --border: rgba(255,255,255,0.08);
+  --grid: #25272b; --axis: #3b3e45; --ink: #f1f2f4; --ink-2: #b4b8bf; --muted: #7f848d;
+  --accent: #2b7fff; --accent-ink: #6ea8ff; --accent-soft: rgba(43,127,255,0.16);
+  --good-soft: rgba(12,163,12,0.16); --crit-soft: rgba(208,59,59,0.18); --warn-soft: rgba(250,178,25,0.16);
+  --pos: #3987e5; --neg: #e66767; --zero: #3a4358; --up: #199e70; --down: #e66767;
+  --line-tenkan: #3987e5; --line-kijun: #d95926; --line-chikou: #9085e9;
+  --cloud-up: rgba(25,158,112,0.20); --cloud-down: rgba(230,103,103,0.20);
+  --shadow: none;
+}
+:root[data-scheme="light"] {
+  color-scheme: light;
+  --page: #f3f4f6; --surface: #ffffff; --surface-2: #f0f2f4; --border: rgba(16,24,40,0.10);
+  --grid: #eceef1; --axis: #cdd2d9; --ink: #1f2328; --ink-2: #4d545e; --muted: #7b828d;
+  --accent: #006fff; --accent-ink: #0059cc; --accent-soft: rgba(0,111,255,0.10);
+  --good-soft: rgba(12,163,12,0.12); --crit-soft: rgba(208,59,59,0.11); --warn-soft: rgba(250,178,25,0.18);
+  --pos: #2a78d6; --neg: #e34948; --zero: #d5d8de; --up: #1baf7a; --down: #e34948;
+  --line-tenkan: #2a78d6; --line-kijun: #eb6834; --line-chikou: #6250d6;
+  --cloud-up: rgba(27,175,122,0.18); --cloud-down: rgba(227,73,72,0.16);
+  --shadow: 0 1px 2px rgba(16,24,40,0.05);
+}
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-s); overflow: hidden; }
+.seg button { background: none; border: 0; padding: 5px 10px; cursor: pointer; color: var(--ink-2); font-size: 12px; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.on { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
+.menurow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
+.fieldlike { display: grid; gap: 6px; justify-items: start; font-size: 12px; color: var(--ink-2); }
+.kvrow { display: flex; flex-wrap: wrap; gap: 28px; margin-bottom: 12px; }
+.kvrow > div { display: flex; align-items: center; gap: 8px; }

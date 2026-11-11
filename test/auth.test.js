@@ -297,3 +297,10 @@ test('e-mail language: recipients with an account get their own language, others
   assert.deepEqual(recipientsByLang(settings, users), [['de', 'a@x.test'], ['en', 'Bob <b@x.test>'], ['pl', 'c@x.test']]);
   assert.deepEqual(recipientsByLang({ smtp: { to: '' }, notify: { lang: 'pl' } }, users), []);
 });
+
+test('update: version comparison and update mode', async () => {
+  const { compareVersions, updateMode, VERSION } = await import('../server/update.js');
+  assert.ok(compareVersions('2.10.0', '2.9.3') > 0); assert.ok(compareVersions('2.6.0', '2.6.1') < 0); assert.equal(compareVersions('3.0.0', '3.0.0'), 0);
+  assert.match(VERSION, /^\d+\.\d+\.\d+$/);
+  assert.notEqual(updateMode(), 'self'); // a development checkout never updates itself
+});
