@@ -1,4 +1,4 @@
-// Domyślna konfiguracja: grupy czasowe, instrumenty, ustawienia.
+// Default configuration: time groups, instruments, settings.
 
 export const CURRENCIES = ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF', 'JPY'];
 
@@ -31,7 +31,7 @@ function fxPairs() {
   return out;
 }
 
-// Skład DAX 40 (notowania Xetra).
+// DAX 40 constituents (Xetra listings).
 const DAX_STOCKS = [
   ['ADS', 'adidas'], ['AIR', 'Airbus'], ['ALV', 'Allianz'], ['BAS', 'BASF'], ['BAYN', 'Bayer'], ['BEI', 'Beiersdorf'], ['BMW', 'BMW'], ['BNR', 'Brenntag'],
   ['CBK', 'Commerzbank'], ['CON', 'Continental'], ['DTG', 'Daimler Truck'], ['DBK', 'Deutsche Bank'], ['DB1', 'Deutsche Börse'], ['DHL', 'DHL Group'], ['DTE', 'Deutsche Telekom'],
@@ -41,7 +41,7 @@ const DAX_STOCKS = [
   ['VOW3', 'Volkswagen'], ['VNA', 'Vonovia'], ['ZAL', 'Zalando'],
 ];
 
-// 50 największych spółek indeksu S&P 500 (kolejne można dodać w ustawieniach).
+// The 50 largest S&P 500 companies (more can be added in settings).
 const SP_STOCKS = [
   ['NVDA', 'Nvidia'], ['MSFT', 'Microsoft'], ['AAPL', 'Apple'], ['AMZN', 'Amazon'], ['GOOGL', 'Alphabet'], ['META', 'Meta Platforms'], ['AVGO', 'Broadcom'], ['TSLA', 'Tesla'],
   ['BRK-B', 'Berkshire Hathaway'], ['JPM', 'JPMorgan Chase'], ['LLY', 'Eli Lilly'], ['V', 'Visa'], ['XOM', 'Exxon Mobil'], ['MA', 'Mastercard'], ['NFLX', 'Netflix'], ['COST', 'Costco'],
@@ -52,9 +52,9 @@ const SP_STOCKS = [
   ['BKNG', 'Booking Holdings'], ['VZ', 'Verizon'],
 ];
 
-// Blok „Scalable": najpopularniejsze instrumenty dostępne u brokera Scalable Capital
-// (ETF-y z Xetry, akcje europejskie i amerykańskie, kryptowaluty). Symbole sprawdzone w Yahoo Finance.
-// Domyślnie wyłączony – włącza się go jednym kliknięciem w Ustawienia → Instrumenty.
+// The "Scalable" block: the most popular instruments available at the broker Scalable Capital
+// (Xetra ETFs, European and US stocks, cryptocurrencies). Symbols verified against Yahoo Finance.
+// Disabled by default – enabled with one click in Settings → Instruments.
 const SC_ETF = [
   ["EUNL.DE", "iShares Core MSCI World"],
   ["VWCE.DE", "Vanguard FTSE All-World Acc"],
@@ -216,32 +216,32 @@ export const DEFAULT_INSTRUMENTS = [
 export const DEFAULT_SETTINGS = {
   data: {
     provider: 'yahoo',          // yahoo | twelvedata | stooq
-    fallbackProvider: '',       // opcjonalne źródło zapasowe
+    fallbackProvider: '',       // optional fallback source
     twelvedataKey: '',
     stooqKey: '',
     finnhubKey: '',
     eodhdKey: '',
-    liveProvider: '',           // źródło bieżących cen dla otwartych pozycji (puste = takie jak dane)
-    liveSeconds: 20,            // co ile sekund odświeżać ceny otwartych pozycji
+    liveProvider: '',           // live price source for open positions (empty = same as data)
+    liveSeconds: 20,            // how often to refresh open-position prices, in seconds
     historyYears: 3,
   },
   ichimoku: { tenkan: 9, kijun: 26, senkou: 52, shift: 26, atr: 14 },
   scoring: {
-    dirThreshold: 4,            // |wynik D1| od którego uznajemy kierunek
-    strongCurrency: 2,          // próg siły waluty dla symetrii CLEAN
-    extWarn: 2,                 // odległość od Kijun w ATR: ostrzeżenie
-    extMax: 3,                  // odległość od Kijun w ATR: przegrzanie
+    dirThreshold: 4,            // |D1 score| from which a direction is declared
+    strongCurrency: 2,          // currency strength threshold for CLEAN symmetry
+    extWarn: 2,                 // distance from Kijun in ATR: warning
+    extMax: 3,                  // distance from Kijun in ATR: overextended
   },
-  sessions: { enabled: true },         // przepływ sesji z danych godzinowych par walutowych
-  h4: { enabled: true, delay_min: 5 }, // analiza otwartych pozycji co 4 godziny
+  sessions: { enabled: true },         // session flow from hourly currency-pair data
+  h4: { enabled: true, delay_min: 5 }, // open-position analysis every 4 hours
   risk: { maxTotal: 5, maxCurrency: 2.5, maxPosition: 1.5 },
   capital: { start: 0, currency: 'EUR', defaultRisk: 1 },
   appearance: { theme: 'normal', loginBg: 'aurora', appBg: 'default', custom: {} },
   notify: {
     mode: 'report',             // off | alerts | report
     minGrade: 'B',
-    positions: 'changes',       // e-maile o otwartych pozycjach (H4): off | changes | always
-    lang: '',                   // język e-maili: pl | de | en (puste = ustawi przeglądarka przy pierwszym uruchomieniu)              // alerty dla setupów od tej klasy
+    positions: 'changes',       // e-mails about open positions (H4): off | changes | always
+    lang: '',                   // e-mail language: pl | de | en (empty = set by the browser on first run)
   },
   smtp: { host: '', port: 587, security: 'starttls', user: '', pass: '', from: '', to: '',
     auth: 'password',           // password | oauth2 (Google)

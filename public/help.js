@@ -1,5 +1,5 @@
-// Instrukcja obsługi w trzech językach. Sekcja: { id, title, body }, gdzie body to lista
-// akapitów (string) i wypunktowań (tablica stringów). **pogrubienie** jest obsługiwane.
+// User guide in three languages. A section is { id, title, body }, where body is a list of
+// paragraphs (string) and bullet lists (array of strings). **bold** is supported.
 
 const pl = [
   { id: 'what', title: 'Czym jest KumoDesk', body: [

@@ -1,11 +1,11 @@
-// Wymienne źródła danych dziennych OHLC.
-// Każde źródło: fetchDaily(symbol, { years, settings }) -> [{date:'YYYY-MM-DD', o,h,l,c,v}] rosnąco.
+// Pluggable sources of daily OHLC data.
+// Each source: fetchDaily(symbol, { years, settings }) -> [{date:'YYYY-MM-DD', o,h,l,c,v}] ascending.
 
-// Uczciwy identyfikator klienta – aplikacja nie podszywa się pod przeglądarkę.
+// Honest client identifier – the app does not pretend to be a browser.
 const UA = 'kumodesk/1.0';
 
 async function http(url, { timeout = 25000, accept = '*/*' } = {}) {
-  // Przy odpowiedzi 429 (limit zapytań) czekamy i ponawiamy – maksymalnie 3 próby.
+  // On a 429 response (rate limit) wait and retry – at most 3 attempts.
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: accept }, signal: AbortSignal.timeout(timeout) });
     const text = await res.text();
@@ -18,7 +18,7 @@ async function http(url, { timeout = 25000, accept = '*/*' } = {}) {
   }
 }
 
-// Prosty ogranicznik: minimalny odstęp między zapytaniami do danego źródła.
+// Simple throttle: a minimum gap between requests to a given source.
 const lastCall = new Map();
 async function throttle(name, gapMs) {
   const now = Date.now();
@@ -43,7 +43,7 @@ async function yahooChart(symbol, query) {
   return { rows, meta: r.meta || {} };
 }
 
-/** Świece godzinowe bez „żywego” notowania doklejanego na końcu (znacznik czasu poza siatką). */
+/** Hourly candles without the live quote appended at the end (its timestamp is off the grid). */
 async function yahooHourly(symbol, range) {
   const { rows, meta } = await yahooChart(symbol, `range=${range}&interval=1h`);
   while (rows.length && rows.at(-1).ts % 1800 !== 0) rows.pop();
@@ -51,22 +51,22 @@ async function yahooHourly(symbol, range) {
 }
 
 /**
- * Yahoo dla części instrumentów (waluty) podaje w świecach dziennych zamknięcie równe otwarciu.
- * Rynek jest ciągły, więc prawdziwe zamknięcie dnia to otwarcie następnego; ostatnia świeca
- * dostaje bieżącą cenę. Naprawa włącza się tylko, gdy wada jest widoczna w danych.
+ * For some instruments (currencies) Yahoo reports a daily close equal to the open.
+ * The market is continuous, so the real close of a day is the next day's open; the last candle
+ * gets the current price. The repair applies only when the defect is visible in the data.
  */
 export function repairFlatCloses(bars, lastPrice) {
   const sample = bars.slice(-120).filter((b) => b.h > b.l);
   if (sample.length < 20) return bars;
   const ratios = sample.map((b) => Math.abs(b.c - b.o) / (b.h - b.l)).sort((x, y) => x - y);
-  if (ratios[Math.floor(ratios.length / 2)] >= 0.12) return bars; // zdrowe dane: mediana korpusu ~0,4–0,5
+  if (ratios[Math.floor(ratios.length / 2)] >= 0.12) return bars; // healthy data: median body ratio ~0.4–0.5
   return bars.map((b, i) => {
     const c = i < bars.length - 1 ? bars[i + 1].o : (Number.isFinite(lastPrice) ? lastPrice : b.c);
     return { ...b, c, h: Math.max(b.h, c), l: Math.min(b.l, c) };
   });
 }
 
-/** Składa świece o stałym kroku (sekundy) z drobniejszych; klucz = początek przedziału UTC. */
+/** Builds fixed-step candles (seconds) from finer ones; key = start of the UTC bucket. */
 export function aggregateBars(rows, stepSec) {
   const out = [];
   let cur = null;
@@ -91,7 +91,7 @@ const yahoo = {
       const bars = rows.map((r) => ({ date: day(r.ts), o: r.o, h: r.h, l: r.l, c: r.c, v: r.v }));
       return repairFlatCloses(bars, meta.regularMarketPrice);
     }
-    // Brak historii dziennej (np. WIG20): składamy dni z danych godzinowych (do 2 lat wstecz).
+    // No daily history (e.g. WIG20): build days from hourly data (up to 2 years back).
     const hourly = await yahooHourly(symbol, '730d');
     const byDay = new Map();
     for (const r of hourly.rows) {
@@ -101,19 +101,19 @@ const yahoo = {
     }
     return [...byDay.values()];
   },
-  /** Świece godzinowe z ostatnich dni (analiza sesji). */
+  /** Hourly candles of the last few days (session analysis). */
   async fetchH1(symbol) {
     const { rows } = await yahooHourly(symbol, '5d');
     return rows.map((r) => ({ ts: r.ts - (r.ts % 3600), o: r.o, h: r.h, l: r.l, c: r.c }));
   },
-  /** Bieżąca cena instrumentu. */
+  /** Current price of the instrument. */
   async fetchQuote(symbol) {
     const { rows, meta } = await yahooChart(symbol, 'range=1d&interval=1d');
     const price = Number.isFinite(meta.regularMarketPrice) ? meta.regularMarketPrice : rows.at(-1)?.c;
     if (!Number.isFinite(price)) throw new Error('no quote');
     return { price, time: meta.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : null };
   },
-  /** Świece 4-godzinne złożone z godzinowych (gotowe „4h” z Yahoo mają błędne otwarcia). */
+  /** 4-hour candles built from hourly ones (Yahoo's ready-made 4h bars have wrong opens). */
   async fetchH4(symbol) {
     const { rows } = await yahooHourly(symbol, '6mo');
     return aggregateBars(rows, 14400);
@@ -180,8 +180,8 @@ const stooq = {
   },
 };
 
-// Finnhub: bieżące notowania (klucz darmowy lub płatny). Bez świec dziennych w darmowym planie,
-// dlatego służy wyłącznie jako źródło cen na żywo.
+// Finnhub: live quotes (free or paid key). No daily candles on the free plan,
+// so it serves only as a live price source.
 const finnhub = {
   id: 'finnhub',
   name: 'Finnhub',
@@ -197,7 +197,7 @@ const finnhub = {
   },
 };
 
-// EODHD: płatne plany obejmują świece dzienne i notowania bieżące dla akcji, walut, indeksów i krypto.
+// EODHD: paid plans cover daily candles and live quotes for stocks, currencies, indices and crypto.
 const eodhd = {
   id: 'eodhd',
   name: 'EODHD',
@@ -225,8 +225,8 @@ const eodhd = {
 export const PROVIDERS = { yahoo, twelvedata, stooq, eodhd, finnhub };
 
 /**
- * Porządkuje świece: sortuje, usuwa duplikaty dat, a świece sobotnio-niedzielne
- * (krótka sesja otwarcia FX) dołącza do najbliższego dnia roboczego po nich.
+ * Tidies candles: sorts, removes duplicate dates, and merges Saturday/Sunday candles
+ * (the short FX opening session) into the next business day.
  */
 export function normalizeBars(bars) {
   const byDate = new Map();
@@ -250,7 +250,7 @@ export function normalizeBars(bars) {
   return out;
 }
 
-/** Pobiera dane instrumentu: źródło instrumentu → domyślne → zapasowe. */
+/** Fetches an instrument's data: instrument source → default → fallback. */
 export async function fetchInstrument(inst, settings) {
   const order = [inst.provider, settings.data.provider, settings.data.fallbackProvider]
     .filter((p, i, a) => p && PROVIDERS[p]?.fetchDaily && a.indexOf(p) === i);
@@ -269,7 +269,7 @@ export async function fetchInstrument(inst, settings) {
   throw new Error(errors.join(' | ') || 'no data source configured');
 }
 
-/** Świece H4 instrumentu (tylko źródła z danymi śróddziennymi). */
+/** An instrument's H4 candles (sources with intraday data only). */
 export async function fetchInstrumentH4(inst, settings) {
   const order = [inst.provider, settings.data.provider, settings.data.fallbackProvider, 'yahoo']
     .filter((p, i, a) => p && PROVIDERS[p]?.fetchH4 && a.indexOf(p) === i);
@@ -286,9 +286,9 @@ export async function fetchInstrumentH4(inst, settings) {
   throw new Error(errors.join(' | ') || 'no intraday data source configured');
 }
 
-/** Bieżąca cena instrumentu ze źródła obsługującego notowania. */
+/** Current price of an instrument from a source that supports quotes. */
 export async function fetchInstrumentQuote(inst, settings) {
-  // najpierw wybrane źródło cen na żywo, potem źródła danych instrumentu
+  // first the chosen live price source, then the instrument's data sources
   const order = [settings.data.liveProvider, inst.provider, settings.data.provider, settings.data.fallbackProvider, 'yahoo']
     .filter((p, i, a) => p && PROVIDERS[p]?.fetchQuote && a.indexOf(p) === i);
   const errors = [];
@@ -301,7 +301,7 @@ export async function fetchInstrumentQuote(inst, settings) {
   throw new Error(errors.join(' | ') || 'no quote source configured');
 }
 
-/** Świece godzinowe instrumentu (do analizy sesji). */
+/** An instrument's hourly candles (for session analysis). */
 export async function fetchInstrumentH1(inst, settings) {
   const pid = [inst.provider, settings.data.provider, 'yahoo'].find((p) => p && PROVIDERS[p]?.fetchH1 && inst.symbols?.[p]);
   if (!pid) throw new Error('no hourly data source configured');

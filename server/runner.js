@@ -1,4 +1,4 @@
-// Pobieranie danych, przeliczanie rynku, migawki, alerty i wysyłka raportów.
+// Data download, market recalculation, snapshots, alerts and report delivery.
 import * as db from './db.js';
 import { fetchInstrument, fetchInstrumentH4, fetchInstrumentH1 } from './providers/index.js';
 import { computeSessions } from './sessions.js';
@@ -8,14 +8,14 @@ import { advisePosition, closedH4, ACTION_RANK } from './positions.js';
 import { pushAlerts } from './push.js';
 import { updateSignals, resultR } from './signals.js';
 
-// Obraz rynku zależy od portfela i limitów użytkownika, więc pamięć podręczna jest osobna dla każdego.
-// Klucz 0 = sam rynek, bez pozycji (migawki, raporty grup, alerty wspólne).
+// The market picture depends on the user's portfolio and limits, so the cache is per user.
+// Key 0 = the market alone, without positions (snapshots, group reports, shared alerts).
 const cache = new Map();
 export const invalidate = () => cache.clear();
 
 export const job = { running: false, trigger: null, group: null, total: 0, done: 0, current: null, errors: [], startedAt: null, finishedAt: null };
 
-/** Aktualny obraz rynku liczony z danych w bazie (z pamięcią podręczną na 60 s). */
+/** Current market picture calculated from stored data (cached for 60 s). */
 export function getMarket(userId = null) {
   const key = userId || 0, now = Date.now();
   const hit = cache.get(key);
@@ -33,13 +33,13 @@ export function getMarket(userId = null) {
     if (pairs.some((p) => h1[p.id].length)) sessions = computeSessions(h1, pairs);
   }
   const market = analyzeMarket({ instruments, candlesById, groupsById, positions: userId ? db.listPositions(userId) : [], settings, sessions });
-  // „zielone światło”: data sygnału i wynik, gdyby wejść zaraz po nim zgodnie z planem
+  // "green light": signal date and the result of entering right after it, following the plan
   const sig = Object.fromEntries(db.openSignals().map((x) => [x.instrument_id, x]));
   for (const a of market.instruments) {
     if (!a.ok) continue;
     const x = sig[a.id];
     if (x) a.signal = { date: x.opened, dir: x.dir, entry: x.entry, stop: x.stop, r: Math.round(resultR(x.dir, x.entry, x.stop, a.close) * 100) / 100, pct: Math.round(((x.dir === 'LONG' ? 1 : -1) * (a.close - x.entry) / x.entry) * 10000) / 100 };
-    else if (a.action === 'PLAY') a.signal = { date: a.date, dir: a.dir, entry: a.close, stop: a.plan.params.stop, r: 0, pct: 0, fresh: true }; // sygnał z ostatniej świecy
+    else if (a.action === 'PLAY') a.signal = { date: a.date, dir: a.dir, entry: a.close, stop: a.plan.params.stop, r: 0, pct: 0, fresh: true }; // signal from the latest candle
     else a.signal = null;
   }
   cache.set(key, { at: now, market });
@@ -48,15 +48,15 @@ export function getMarket(userId = null) {
 }
 
 /**
- * Odświeża dane grupy (lub wszystkich instrumentów), zapisuje migawkę i alerty.
- * trigger: 'manual' | 'schedule'. Zwraca { ok, fetched, errors, alerts, mail }.
+ * Refreshes a group's data (or all instruments), stores a snapshot and alerts.
+ * trigger: 'manual' | 'schedule'. Returns { ok, fetched, errors, alerts, mail }.
  */
 export async function refresh({ groupId = null, trigger = 'manual' } = {}) {
   if (job.running) throw new Error('BUSY');
   const settings = db.getSettings();
   const group = groupId != null ? db.getGroup(groupId) : null;
   const list = db.listInstruments().filter((i) => i.enabled && (groupId == null || i.group_id === groupId));
-  // dane godzinowe par walutowych do analizy sesji – razem z grupą, w której są waluty
+  // hourly currency-pair data for session analysis – together with the group that holds the currencies
   const hourly = settings.sessions.enabled ? list.filter((i) => i.class === 'fx') : [];
   Object.assign(job, { running: true, trigger, group: group?.name || null, total: list.length + hourly.length, done: 0, current: null, errors: [], startedAt: new Date().toISOString(), finishedAt: null });
   let fetched = 0;
@@ -87,7 +87,7 @@ export async function refresh({ groupId = null, trigger = 'manual' } = {}) {
     const prev = db.lastSnapshot();
     const alerts = diffAlerts(prev?.summary, summary, { minGrade: settings.notify.minGrade, groupId });
     db.saveSnapshot({ trigger: trigger === 'schedule' ? `schedule:${group?.name || ''}` : 'manual', group_id: groupId, matrix_score: market.matrix.score, regime: market.regime.state, exec_state: market.exec, summary });
-    // powiadomienie „analiza gotowa” – odpowiednik raportu e-mail po analizie grupy
+    // "analysis ready" notification – the counterpart of the e-mail report after a group analysis
     const done = [];
     if (trigger === 'schedule' && fetched > 0) {
       const plays = market.ranking.map((id) => market.instruments.find((x) => x.id === id)).filter((x) => x && x.action === 'PLAY' && (groupId == null || x.group_id === groupId));
@@ -114,9 +114,9 @@ export async function refresh({ groupId = null, trigger = 'manual' } = {}) {
 }
 
 /**
- * Analiza otwartych pozycji na świecach H4 – wszystkich użytkowników albo jednego (userId).
- * Pobiera H4 tylko dla instrumentów z pozycjami, wylicza poradę, zapisuje ją przy pozycji
- * i zgłasza zmiany właścicielowi pozycji (dzwonek, e-mail).
+ * Analysis of open positions on H4 candles – for all users or one (userId).
+ * Fetches H4 only for instruments with positions, computes the advice, stores it on the position
+ * and reports changes to the position's owner (bell, e-mail).
  */
 export async function checkPositions({ trigger = 'manual', userId = null } = {}) {
   if (job.running) throw new Error('BUSY');
@@ -162,7 +162,7 @@ export async function checkPositions({ trigger = 'manual', userId = null } = {})
           message: JSON.stringify({ code: 'alert.h4', params: { id: c.instrument_id, dir: c.direction, action: c.advice.action, reason: c.advice.reason } }),
         })));
       }
-      // e-mail do właściciela pozycji; administrator bez własnego adresu dostaje go na adres ogólny
+      // e-mail to the position's owner; an administrator without an address gets it at the general recipients
       const user = owner ? db.getUser(owner) : null;
       const to = user?.email || (!user || user.role === 'admin' ? global.smtp.to : null);
       const mode = global.notify.positions;

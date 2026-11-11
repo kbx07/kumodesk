@@ -14,11 +14,11 @@
   --warn: #fab219;
   --serious: #ec835a;
   --crit: #d03b3b;
-  --pos: #3987e5;      /* biegun dodatni (siła) */
-  --neg: #e66767;      /* biegun ujemny */
+  --pos: #3987e5;      /* positive pole (strength) */
+  --neg: #e66767;      /* negative pole */
   --zero: #3a4358;
-  --up: #199e70;       /* świeca wzrostowa */
-  --down: #e66767;     /* świeca spadkowa */
+  --up: #199e70;       /* up candle */
+  --down: #e66767;     /* down candle */
   --line-tenkan: #3987e5;
   --line-kijun: #d95926;
   --line-chikou: #9085e9;
@@ -297,7 +297,7 @@ textarea { background: var(--surface-2); border: 1px solid var(--border); border
 @media (max-width: 760px) { .bellpanel { position: fixed; right: 16px; left: 16px; top: 120px; width: auto; } }
 .bellcount[hidden] { display: none; }
 
-/* ---------- logowanie ---------- */
+/* ---------- sign-in ---------- */
 body.locked { overflow: hidden; }
 body.locked > header, body.locked > main, body.locked > footer { visibility: hidden; }
 .auth { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 16px; overflow: auto; }
@@ -314,7 +314,7 @@ body.locked > header, body.locked > main, body.locked > footer { visibility: hid
 .authform .btn { padding: 10px; font-size: 15px; margin-top: 4px; }
 .authfoot { display: flex; justify-content: space-between; align-items: center; margin-top: 18px; }
 
-/* tła ekranu logowania (także miniatury w ustawieniach) */
+/* sign-in screen backgrounds (also the thumbnails in settings) */
 .lbg-plain { background: var(--page); }
 .lbg-aurora { background: #070b16; }
 .lbg-aurora .authbg i:nth-child(1) { width: 55%; height: 60%; left: -10%; top: -15%; background: #2a78d6; animation: drift1 22s ease-in-out infinite alternate; }
@@ -337,7 +337,7 @@ body.locked > header, body.locked > main, body.locked > footer { visibility: hid
 @keyframes drift3 { to { transform: translate(8%, -12%) scale(1.2); } }
 @media (prefers-reduced-motion: reduce) { .authbg i { animation: none !important; } }
 
-/* tła aplikacji */
+/* app backgrounds */
 body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; }
 body[data-bg="aurora"]::before, .abg-aurora { background: radial-gradient(at 8% 0%, color-mix(in srgb, #2a78d6 22%, transparent) 0, transparent 45%), radial-gradient(at 96% 10%, color-mix(in srgb, #7b5cf0 18%, transparent) 0, transparent 42%), radial-gradient(at 60% 100%, color-mix(in srgb, #19a37d 14%, transparent) 0, transparent 46%), var(--page); }
 body[data-bg="grid"]::before, .abg-grid { background-color: var(--page); background-image: radial-gradient(color-mix(in srgb, var(--ink) 14%, transparent) 1px, transparent 1.4px); background-size: 22px 22px; }
@@ -351,7 +351,7 @@ body[data-bg="midnight"]::before, .abg-midnight { background: linear-gradient(16
 .bgopt input:checked + .bgprev { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
 .bgopt input:focus-visible + .bgprev { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* użytkownik, wiadomości, udostępnianie */
+/* user, messages, sharing */
 .avatar { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; flex: none; }
 .userbtn { display: flex; align-items: center; gap: 7px; height: 34px; padding: 0 9px 0 5px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; }
 .userbtn:hover { border-color: var(--accent); }
@@ -377,7 +377,7 @@ a.bell { text-decoration: none; }
 .msgform { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; border-top: 1px solid var(--border); padding-top: 12px; }
 
 /* =====================================================================
-   Wygląd 2: stonowany, płaski, zwarty. Nadpisuje wcześniejsze reguły.
+   Look 2: calm, flat, compact. Overrides the earlier rules.
    ===================================================================== */
 :root {
   --page: #101113; --surface: #1a1b1e; --surface-2: #232529; --border: rgba(255,255,255,0.08);
@@ -465,11 +465,11 @@ dialog { border-radius: 10px; }
 .bsym { font-size: 24px; } .bhead { font-size: 18px; font-weight: 650; } .bdir { font-size: 16px; border-width: 1px; border-radius: 6px; padding: 8px 12px; }
 .tk-sym { font-size: 18px; } .tk-price { font-size: 20px; } .tk-side { border-width: 1px; } .tk-side b { font-size: 15px; }
 .detail-head h1 { font-size: 20px; }
-/* formularze: pola w jednej linii niezależnie od podpowiedzi pod polem */
+/* forms: fields stay in one row regardless of hints below a field */
 .form { align-items: start; }
 .form > div:has(> .btn):not(.wide) { padding-top: 21px; }
 
-/* ---------- motywy ---------- */
+/* ---------- themes ---------- */
 .decor { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; background-size: cover; background-position: center; }
 body.locked .decor { z-index: 101; }
 .decor .fig { position: absolute; bottom: 0; height: min(62vh, 520px); width: auto; opacity: .5; }
@@ -496,7 +496,7 @@ body.locked .decor { z-index: 99; } .auth { z-index: 100; }
 body.locked .decor .fig { opacity: .85; } body.locked .bit { opacity: .8; }
 .thm-normal { background: var(--surface-2); } .thm-anime { background: linear-gradient(135deg, #ff7eb6, #b79cff); } .thm-cosplay { background: linear-gradient(135deg, #35e0ff, #b14bff 55%, #ff4fd8); } .thm-custom { background: repeating-linear-gradient(45deg, var(--surface-2) 0 8px, var(--grid) 8px 16px); }
 
-/* 2FA i logi */
+/* 2FA and logs */
 .twofa .steps { margin: 0; padding-left: 18px; color: var(--ink-2); display: grid; gap: 4px; font-size: 13px; }
 .qr { background: #fff; border-radius: 8px; padding: 8px; width: 190px; justify-self: center; margin: 4px auto; }
 .qr svg { display: block; width: 100%; height: auto; }
@@ -506,7 +506,7 @@ body.locked .decor .fig { opacity: .85; } body.locked .bit { opacity: .8; }
 .logtable td { padding: 5px 8px; } .logtable tr:hover td { background: var(--surface-2); }
 .card h3 select { height: 28px; font-weight: 400; }
 
-/* czat grupowy i załączniki */
+/* group chat and attachments */
 .msguser { display: flex; gap: 8px; align-items: center; }
 .msguserlink { display: flex; gap: 10px; align-items: center; flex: 1; min-width: 0; }
 .avatar.room { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--border); border-radius: 6px; }

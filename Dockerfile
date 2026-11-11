@@ -1,4 +1,4 @@
-# KumoDesk – obraz Docker (Node 22, wbudowany SQLite, bez etapu budowania frontendu)
+# KumoDesk – Docker image (Node 22, built-in SQLite, no frontend build step)
 FROM node:22-alpine
 
 ENV NODE_ENV=production \

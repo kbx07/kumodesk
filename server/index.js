@@ -1,4 +1,4 @@
-// KumoDesk – serwer HTTP (API + pliki statyczne).
+// KumoDesk – HTTP server (API + static files).
 import express from 'express';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -31,7 +31,7 @@ db.openDb(path.join(DATA_DIR, 'kumodesk.db'));
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '200kb' }));
-app.use('/api', auth.requireAuth); // wszystko poza /api/auth/* wymaga zalogowania
+app.use('/api', auth.requireAuth); // everything except /api/auth/* requires a session
 const admin = auth.requireAdmin;
 
 const wrap = (fn) => (req, res) => new Promise((resolve) => resolve(fn(req, res))).catch((e) => {
@@ -48,7 +48,7 @@ const APP_BGS = ['default', 'aurora', 'grid', 'midnight'];
 const THEMES = ['normal', 'anime', 'cosplay', 'custom'];
 const THEME_SLOTS = ['left', 'right', 'bg'];
 const THEME_DIR = path.join(DATA_DIR, 'theme');
-/** Rozpoznaje obraz po pierwszych bajtach – nie ufamy nagłówkowi ani nazwie pliku. */
+/** Detects an image by its first bytes – neither the header nor the file name is trusted. */
 function sniffImage(buf) {
   if (buf.length > 8 && buf[0] === 0x89 && buf.toString('latin1', 1, 4) === 'PNG') return 'image/png';
   if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
@@ -57,18 +57,18 @@ function sniffImage(buf) {
   return null;
 }
 
-/** Ustawienia widoczne dla użytkownika: osobiste zawsze, dane serwera (SMTP, klucze) tylko dla administratora. */
+/** Settings visible to a user: personal ones always, server data (SMTP, keys) for administrators only. */
 function publicSettings(user) {
   const s = db.getSettings(user.id);
   if (user.role === 'admin') return { ...s, smtp: { ...s.smtp, pass: '', passSet: !!s.smtp.pass, oauthClientSecret: '', oauthSecretSet: !!s.smtp.oauthClientSecret, oauthRefreshToken: '', oauthConnected: !!s.smtp.oauthRefreshToken } };
   return { ...s, smtp: { host: '', port: 587, security: 'starttls', user: '', pass: '', from: '', to: '', passSet: false, auth: 'password', oauthClientId: '', oauthClientSecret: '', oauthRefreshToken: '' }, data: { ...s.data, twelvedataKey: '', stooqKey: '', finnhubKey: '', eodhdKey: '' } };
 }
 
-/** Wpis do dziennika zdarzeń. */
+/** Writes an event log entry. */
 const log = (req, category, code, params = {}, level = 'info', userId = undefined) =>
   db.addLog({ user_id: userId !== undefined ? userId : (req?.user?.id ?? null), category, level, code, params, ip: req ? auth.clientIp(req) : null });
 
-// ---------- logowanie ----------
+// ---------- sign-in ----------
 const appearance = () => db.getSettings().appearance;
 const loginKey = (req, username) => `${req.socket.remoteAddress}|${String(username || '').toLowerCase()}`;
 app.get('/api/auth/state', wrap((req, res) => {
@@ -90,10 +90,10 @@ app.post('/api/auth/login', wrap((req, res) => {
   const key = loginKey(req, username);
   if (!auth.loginAllowed(key)) throw Object.assign(new Error('err.loginLocked'), { status: 429 });
   const u = db.getUserAuth(String(username || ''));
-  // sprawdzamy hasło także dla nieistniejącego loginu, żeby czas odpowiedzi nie zdradzał, czy konto istnieje
+  // verify the password even for an unknown username so response time does not reveal whether the account exists
   const ok = auth.verifyPassword(String(password || ''), u ? u.pass_hash : 'scrypt$00$00') && !!u;
   if (!ok) { auth.loginFailed(key); log(req, 'auth', 'auth.loginFailed', { username: String(username || '').slice(0, 40) }, 'warn', u ? u.id : null); throw Object.assign(new Error('err.loginBad'), { status: 401 }); }
-  // drugi etap: kod z aplikacji albo kod zapasowy, chyba że urządzenie jest zapamiętane
+  // second step: app code or recovery code, unless the device is remembered
   if (u.totp_enabled && !auth.deviceRemembered(req, u.id)) {
     if (!code) return res.json({ twofa: true });
     const counter = totp.verify(u.totp_secret, code, { lastCounter: u.totp_last });
@@ -109,7 +109,7 @@ app.post('/api/auth/login', wrap((req, res) => {
   auth.loginOk(key);
   auth.startSession(req, res, u.id);
   log(req, 'auth', 'auth.login', {}, 'info', u.id);
-  // obecnym kontom bez 2FA przypominamy raz w dzwonku
+  // existing accounts without 2FA get one reminder in the bell
   if (!u.totp_enabled && !u.totp_required && !u.totp_nagged) {
     db.saveAlerts([{ type: 'SECURITY', severity: 'MED', user_id: u.id, message: JSON.stringify({ code: 'alert.twofa', params: {} }) }]);
     db.markNagged(u.id);
@@ -117,11 +117,11 @@ app.post('/api/auth/login', wrap((req, res) => {
   res.json({ user: db.getUser(u.id) });
 }));
 
-// ---------- weryfikacja dwuetapowa (wymaga sesji; działa także, gdy 2FA jest dopiero obowiązkowa) ----------
+// ---------- two-factor authentication (needs a session; also works while 2FA is still pending) ----------
 const sessionUser = (req) => { const u = auth.currentUser(req); if (!u) throw Object.assign(new Error('err.loginNeeded'), { status: 401 }); return u; };
 app.post('/api/auth/2fa/begin', wrap(async (req, res) => {
   const u = sessionUser(req), full = db.getUserAuthById(u.id);
-  // zmiana już włączonej weryfikacji wymaga hasła
+  // changing an already enabled second factor requires the password
   if (full.totp_enabled && !auth.verifyPassword(String(req.body?.password || ''), full.pass_hash)) throw bad('err.passwordCurrent');
   const secret = totp.newSecret();
   db.setTotpPending(u.id, secret);
@@ -157,7 +157,7 @@ app.post('/api/auth/2fa/recovery', wrap((req, res) => {
 }));
 app.post('/api/auth/2fa/forget-devices', wrap((req, res) => { const u = sessionUser(req); db.forgetDevices(u.id); res.json({ ok: true }); }));
 app.get('/api/auth/2fa/devices', wrap((req, res) => res.json(db.listDevices(sessionUser(req).id))));
-// obrazki własnego motywu – widoczne także na ekranie logowania
+// custom theme images – also visible on the sign-in screen
 app.get('/api/auth/theme/:slot', wrap((req, res) => {
   const slot = req.params.slot, meta = appearance().custom?.[slot];
   if (!THEME_SLOTS.includes(slot) || !meta) return res.status(404).end();
@@ -166,7 +166,7 @@ app.get('/api/auth/theme/:slot', wrap((req, res) => {
 }));
 app.post('/api/auth/logout', wrap((req, res) => { const u = auth.currentUser(req); if (u) log(req, 'auth', 'auth.logout', {}, 'info', u.id); auth.endSession(req, res); res.json({ ok: true }); }));
 
-// ---------- konto i użytkownicy ----------
+// ---------- account and users ----------
 const cleanEmail = (e) => { const v = String(e || '').trim().slice(0, 200); if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw bad('err.email'); return v; };
 app.put('/api/account', wrap((req, res) => {
   const b = req.body || {};
@@ -178,10 +178,10 @@ app.put('/api/account', wrap((req, res) => {
     patch.pass_hash = auth.hashPassword(b.password);
   }
   const user = db.updateUser(req.user.id, patch);
-  if (patch.pass_hash) { auth.startSession(req, res, user.id); log(req, 'auth', 'auth.password'); } // zmiana hasła wylogowuje inne urządzenia
+  if (patch.pass_hash) { auth.startSession(req, res, user.id); log(req, 'auth', 'auth.password'); } // a password change signs out other devices
   res.json({ user });
 }));
-// lista do wyboru odbiorcy (udostępnianie, wiadomości): bez adresów e-mail dla zwykłych użytkowników
+// list for choosing a recipient (sharing, messages): no e-mail addresses for regular users
 app.get('/api/users', wrap((req, res) => res.json(db.listUsers().map((u) => (req.user.role === 'admin' ? u : { id: u.id, username: u.username, role: u.role })))));
 app.post('/api/users', admin, wrap((req, res) => {
   const { username, password, role, email } = req.body || {};
@@ -201,7 +201,7 @@ app.put('/api/users/:id', admin, wrap((req, res) => {
   }
   if (b.email !== undefined) patch.email = cleanEmail(b.email);
   if (b.password) { if (!auth.validPassword(b.password)) throw bad('err.password'); patch.pass_hash = auth.hashPassword(b.password); }
-  if (b.reset2fa) db.disableTotp(id); // użytkownik skonfiguruje weryfikację od nowa przy logowaniu
+  if (b.reset2fa) db.disableTotp(id); // the user sets up the second factor again at sign-in
   log(req, 'admin', 'admin.userEdit', { name: cur.username, reset2fa: !!b.reset2fa, password: !!b.password });
   res.json(db.updateUser(id, patch));
 }));
@@ -216,7 +216,7 @@ app.delete('/api/users/:id', admin, wrap((req, res) => {
   res.json({ ok: true });
 }));
 
-// ---------- własny motyw: wgrywanie obrazków ----------
+// ---------- custom theme: image upload ----------
 app.put('/api/theme/:slot', admin, express.raw({ type: () => true, limit: '5mb' }), wrap((req, res) => {
   const slot = req.params.slot;
   if (!THEME_SLOTS.includes(slot)) throw bad('err.background');
@@ -238,8 +238,8 @@ app.delete('/api/theme/:slot', admin, wrap((req, res) => {
   res.json({ appearance: appearance() });
 }));
 
-// ---------- Google: połączenie konta do wysyłki poczty (OAuth2) ----------
-// Wymaga własnego klienta OAuth w Google Cloud z adresem powrotnym https://<twoja-domena>/api/auth/google/callback.
+// ---------- Google: connecting an account for sending mail (OAuth2) ----------
+// Needs your own OAuth client in Google Cloud with the redirect URI https://<your-domain>/api/auth/google/callback.
 const googleRedirect = (req) => `${req.headers['x-forwarded-proto'] || req.protocol}://${req.headers['x-forwarded-host'] || req.headers.host}/api/auth/google/callback`;
 app.get('/api/google/start', admin, wrap((req, res) => {
   const s = db.getSettings().smtp;
@@ -251,7 +251,7 @@ app.get('/api/google/start', admin, wrap((req, res) => {
 }));
 app.get('/api/auth/google/callback', wrap(async (req, res) => {
   const user = auth.currentUser(req);
-  let saved = {}; try { saved = JSON.parse(db.getMeta('googleState') || '{}'); } catch { /* brak */ }
+  let saved = {}; try { saved = JSON.parse(db.getMeta('googleState') || '{}'); } catch { /* none */ }
   const done = (msg) => res.redirect(`/#/settings?google=${encodeURIComponent(msg)}`);
   if (!user || user.role !== 'admin' || !saved.state || saved.state !== req.query.state || saved.user !== user.id || saved.exp < Date.now()) return done('state');
   db.setMeta('googleState', '');
@@ -273,7 +273,7 @@ app.post('/api/google/disconnect', admin, wrap((req, res) => {
   res.json({ ok: true });
 }));
 
-// ---------- ceny na żywo dla otwartych pozycji ----------
+// ---------- live prices for open positions ----------
 const liveCache = new Map(); // id -> { at, quote }
 app.get('/api/positions/live', wrap(async (req, res) => {
   const s = db.getSettings();
@@ -287,12 +287,12 @@ app.get('/api/positions/live', wrap(async (req, res) => {
     const inst = db.getInstrument(id);
     if (!inst) continue;
     try { const q = await quoteFor(inst); liveCache.set(id, { at: Date.now(), quote: q }); out[id] = q; }
-    catch { /* brak ceny – pozycja pokaże ostatnie zamknięcie */ }
+    catch { /* no price – the position shows the last close */ }
   }
   res.json({ quotes: out, every: Math.round(ttl / 1000) });
 }));
 
-// ---------- skuteczność algorytmu ----------
+// ---------- algorithm accuracy ----------
 app.get('/api/signals', wrap((req, res) => {
   const since = new Date(Date.now() - 370 * 86400000).toISOString().slice(0, 10);
   const list = db.listSignals(since);
@@ -305,7 +305,7 @@ app.post('/api/signals/rebuild', admin, wrap((req, res) => {
   res.status(202).json({ started: true });
 }));
 
-// ---------- logi ----------
+// ---------- logs ----------
 const LOG_CATEGORIES = ['auth', 'trade', 'system', 'data', 'notify', 'admin'];
 app.get('/api/logs', wrap((req, res) => {
   const q = req.query, isAdm = req.user.role === 'admin';
@@ -314,14 +314,14 @@ app.get('/api/logs', wrap((req, res) => {
   res.json({ categories: LOG_CATEGORIES, rows: rows.map((r) => ({ id: r.id, ts: r.ts, user: r.username || null, category: r.category, level: r.level, code: r.code, params: r.params, ip: isAdm ? r.ip : undefined })) });
 }));
 
-// ---------- udostępnianie portfela ----------
+// ---------- portfolio sharing ----------
 app.get('/api/shares', wrap((req, res) => res.json({ viewers: db.sharesOf(req.user.id), sharedWithMe: db.sharedWith(req.user.id) })));
 app.put('/api/shares', wrap((req, res) => {
   const ids = Array.isArray(req.body?.viewers) ? req.body.viewers.map(Number).filter(Number.isInteger).slice(0, 500) : [];
   db.setShares(req.user.id, ids);
   res.json({ viewers: db.sharesOf(req.user.id) });
 }));
-// Portfel innego użytkownika – tylko gdy go udostępnił. Wyłącznie do odczytu.
+// Another user's portfolio – only when they shared it. Read-only.
 app.get('/api/portfolio/:userId', wrap((req, res) => {
   const owner = db.getUser(Number(req.params.userId));
   if (!owner || !db.canView(owner.id, req.user.id)) return res.status(403).json({ error: 'err.notShared' });
@@ -330,7 +330,7 @@ app.get('/api/portfolio/:userId', wrap((req, res) => {
   res.json({ owner: { id: owner.id, username: owner.username }, portfolio: market.portfolio, capital: s.capital, ...buildLedger(db.listTrades(owner.id), s.capital.start) });
 }));
 
-// ---------- wiadomości ----------
+// ---------- messages ----------
 function tradeSnapshot(userId, tradeId) {
   const t = db.getTrade(tradeId);
   if (!t || t.user_id !== userId) throw bad('err.tradeNotFound');
@@ -340,7 +340,7 @@ function tradeSnapshot(userId, tradeId) {
     opened: t.opened, closed: t.closed, r: t.r, pnl: row?.pnl ?? null, pnlPct: row?.pnlPct ?? null, currency: s.capital.currency };
 }
 const FILES_DIR = path.join(DATA_DIR, 'files');
-/** Wspólna część wysyłki: treść, zagranie, załącznik. */
+/** Shared part of sending: body, trade, attachment. */
 function messageParts(req) {
   const b = req.body || {};
   const body = String(b.body || '').trim().slice(0, 2000);
@@ -374,7 +374,7 @@ app.post('/api/messages', wrap((req, res) => {
   res.status(201).json({ id });
 }));
 
-// ---------- czat grupowy: grupy zakłada i obsadza administrator ----------
+// ---------- group chat: groups are created and staffed by an administrator ----------
 function validRoom(b) {
   const name = String(b?.name || '').trim().slice(0, 60);
   if (!name) throw bad('err.roomName');
@@ -402,13 +402,13 @@ app.post('/api/rooms/:id/messages', wrap((req, res) => {
   res.status(201).json({ id });
 }));
 
-// ---------- załączniki do wiadomości (do 5 MB) ----------
+// ---------- message attachments (up to 5 MB) ----------
 app.post('/api/files', express.raw({ type: () => true, limit: '5mb' }), wrap((req, res) => {
   if (!Buffer.isBuffer(req.body) || !req.body.length) throw bad('err.fileEmpty');
   let name = 'file';
-  try { name = decodeURIComponent(String(req.headers['x-filename'] || 'file')); } catch { /* zostaje nazwa domyślna */ }
+  try { name = decodeURIComponent(String(req.headers['x-filename'] || 'file')); } catch { /* keep the default name */ }
   name = name.replace(/[\\/\u0000-\u001f"<>|:*?]/g, '_').slice(-120) || 'file';
-  // typ ustalamy sami: rozpoznane obrazy pokazujemy w podglądzie, całą resztę podajemy wyłącznie do pobrania
+  // the type is decided here: recognised images are previewed, everything else is download-only
   const type = sniffImage(req.body) || 'application/octet-stream';
   const id = db.addFile({ owner_id: req.user.id, name, type, size: req.body.length });
   fs.mkdirSync(FILES_DIR, { recursive: true });
@@ -424,7 +424,7 @@ app.get('/api/files/:id', wrap((req, res) => {
   fs.createReadStream(path.join(FILES_DIR, String(f.id))).on('error', () => res.status(404).end()).pipe(res);
 }));
 
-// ---------- powiadomienia push ----------
+// ---------- push notifications ----------
 app.get('/api/push/key', wrap((req, res) => res.json({ key: vapidPublicKey(), devices: db.pushSubs(req.user.id).length })));
 app.post('/api/push/subscribe', wrap((req, res) => {
   const sub = req.body?.subscription;
@@ -439,10 +439,10 @@ app.post('/api/push/test', wrap(async (req, res) => {
   res.json({ sent: n });
 }));
 
-// ---------- rynek ----------
+// ---------- market ----------
 app.get('/api/dashboard', wrap((req, res) => res.json(getMarket(req.user.id))));
 
-// Wykres „obecny”: dociąga świeże dane instrumentu, najwyżej raz na 5 minut.
+// "Current" chart: fetches fresh data for the instrument, at most once every 5 minutes.
 async function freshenForLiveView(inst, tf) {
   if (job.running) return;
   const age = inst.last_fetch_at ? Date.now() - Date.parse(inst.last_fetch_at) : Infinity;
@@ -459,8 +459,8 @@ async function freshenForLiveView(inst, tf) {
 app.get('/api/instrument/:id', wrap(async (req, res) => {
   let inst = db.getInstrument(req.params.id);
   if (!inst) return res.status(404).json({ error: 'err.notFound' });
-  // view=analysis: dokładnie te świece, na których liczona jest analiza (tylko zamknięte)
-  // view=live: to samo plus świeca jeszcze niezamknięta, ze świeżymi danymi
+  // view=analysis: exactly the candles the analysis is calculated on (closed only)
+  // view=live: the same plus the candle still in progress, with fresh data
   const view = req.query.view === 'live' ? 'live' : 'analysis';
   const allH4 = db.getH4(inst.id);
   const tf = req.query.tf === 'h4' && allH4.length ? 'h4' : 'd1';
@@ -488,7 +488,7 @@ app.get('/api/instrument/:id', wrap(async (req, res) => {
     shift,
     bars: bars.slice(from),
     tenkan: ich.tenkan.slice(from), kijun: ich.kijun.slice(from),
-    cloudA: ich.cloudA.slice(from), cloudB: ich.cloudB.slice(from), // dłuższe o `shift` (chmura przyszła)
+    cloudA: ich.cloudA.slice(from), cloudB: ich.cloudB.slice(from), // longer by `shift` (future cloud)
   };
   const positions = market.portfolio.positions.filter((p) => p.instrument_id === inst.id);
   res.json({ instrument: inst, group, analysis, chart, tf, view, openBar, updatedAt: inst.last_fetch_at, hasH4: allH4.length > 0, positions });
@@ -532,7 +532,7 @@ app.get('/api/history', wrap((req, res) => {
   })));
 }));
 
-// Dzwonek: te same zdarzenia, które trafiają do e-maili.
+// Bell: the same events that go out by e-mail.
 app.get('/api/notifications', wrap((req, res) => {
   const seen = db.getBellSeen(req.user.id);
   res.json({ seen, items: db.listAlerts(40, req.user.id).map((a) => {
@@ -553,7 +553,7 @@ app.get('/api/alerts', wrap((req, res) => {
   }));
 }));
 
-// ---------- ustawienia ----------
+// ---------- settings ----------
 app.get('/api/settings', wrap((req, res) => {
   res.json({
     settings: publicSettings(req.user),
@@ -565,7 +565,7 @@ app.get('/api/settings', wrap((req, res) => {
 
 app.put('/api/settings', wrap((req, res) => {
   const patch = req.body || {};
-  // kapitał i limity ryzyka są osobiste; reszta to ustawienia serwera i wymaga administratora
+  // capital and risk limits are personal; the rest are server settings and need an administrator
   const personal = {};
   for (const k of db.PERSONAL_KEYS) if (patch[k]) { personal[k] = patch[k]; }
   const globalKeys = Object.keys(patch).filter((k) => !db.PERSONAL_KEYS.includes(k));
@@ -574,14 +574,14 @@ app.put('/api/settings', wrap((req, res) => {
     if (patch.appearance.loginBg != null && !LOGIN_BGS.includes(patch.appearance.loginBg)) throw bad('err.background');
     if (patch.appearance.appBg != null && !APP_BGS.includes(patch.appearance.appBg)) throw bad('err.background');
     if (patch.appearance.theme != null && !THEMES.includes(patch.appearance.theme)) throw bad('err.background');
-    delete patch.appearance.custom; // obrazki zmienia się tylko przez wgranie pliku
+    delete patch.appearance.custom; // images change only through file upload
   }
   if (patch.risk) for (const k of ['maxTotal', 'maxCurrency', 'maxPosition']) if (patch.risk[k] != null) { const v = Number(patch.risk[k]); if (!(v > 0 && v <= 100)) throw bad('err.riskPct'); patch.risk[k] = v; }
   if (patch.smtp) {
     if (!patch.smtp.pass && !patch.smtp.clearPass) delete patch.smtp.pass;
     if (!patch.smtp.oauthClientSecret) delete patch.smtp.oauthClientSecret;
     if (patch.smtp.auth != null && !['password', 'oauth2'].includes(patch.smtp.auth)) throw bad('err.smtp');
-    // token odświeżania ustawia wyłącznie połączenie z Google albo jawne wklejenie
+    // the refresh token is set only by connecting to Google or by pasting it explicitly
     if (!patch.smtp.oauthRefreshToken) delete patch.smtp.oauthRefreshToken;
     delete patch.smtp.passSet; delete patch.smtp.clearPass; delete patch.smtp.oauthSecretSet; delete patch.smtp.oauthConnected;
   }
@@ -626,7 +626,7 @@ app.post('/api/providers/test', admin, wrap(async (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 }));
 
-// ---------- grupy czasowe ----------
+// ---------- time groups ----------
 function validGroup(b, partial = false) {
   const g = {};
   if (b.name != null || !partial) { g.name = String(b.name || '').trim(); if (!g.name) throw bad('err.groupName'); }
@@ -654,7 +654,7 @@ app.delete('/api/groups/:id', admin, wrap((req, res) => {
   res.json({ ok: true });
 }));
 
-// ---------- instrumenty ----------
+// ---------- instruments ----------
 function validInstrument(b, existing) {
   const id = String(existing?.id || b.id || '').trim().toUpperCase();
   if (!/^[A-Z0-9._-]{1,20}$/.test(id)) throw bad('err.instId');
@@ -691,7 +691,7 @@ app.put('/api/instruments/:id', admin, wrap((req, res) => {
   invalidate();
   res.json(saved);
 }));
-// Import wielu instrumentów naraz: linie „SYMBOL;Nazwa” (symbol źródła danych).
+// Bulk import of instruments: lines "SYMBOL;Name" (data-source symbol).
 app.post('/api/instruments/import', admin, wrap((req, res) => {
   const b = req.body || {};
   const provider = PROVIDERS[b.provider] ? b.provider : db.getSettings().data.provider;
@@ -707,7 +707,7 @@ app.post('/api/instruments/import', admin, wrap((req, res) => {
   for (const line of lines) {
     const [symRaw, ...rest] = line.split(/[;,\t]/);
     const symbol = (symRaw || '').trim();
-    // symbol źródła może zawierać ^ i = (np. ^GSPC, GC=F); identyfikator w aplikacji już nie
+    // a source symbol may contain ^ and = (e.g. ^GSPC, GC=F); the in-app identifier may not
     const id = symbol.toUpperCase().replace(/[\^=]/g, '');
     if (!/^[A-Za-z0-9.^=_-]{1,24}$/.test(symbol) || !/^[A-Z0-9._-]{1,20}$/.test(id)) { invalid.push(line.slice(0, 30)); continue; }
     if (db.getInstrument(id)) { skipped++; continue; }
@@ -728,8 +728,8 @@ app.post('/api/categories/toggle', admin, wrap((req, res) => {
 }));
 app.delete('/api/instruments/:id', admin, wrap((req, res) => { db.deleteInstrument(req.params.id); invalidate(); res.json({ ok: true }); }));
 
-// ---------- bieżąca cena ----------
-/** Cena z API; gdy źródło zawiedzie – ostatnie zamknięcie z bazy (oznaczone jako nieaktualne). */
+// ---------- current price ----------
+/** Price from the API; if the source fails – the last close from the database (marked as stale). */
 async function quoteFor(inst) {
   try {
     const q = await fetchInstrumentQuote(inst, db.getSettings());
@@ -746,7 +746,7 @@ app.get('/api/quote/:id', wrap(async (req, res) => {
   res.json(await quoteFor(inst));
 }));
 
-// ---------- portfel ----------
+// ---------- portfolio ----------
 function validPosition(b) {
   const p = { id: b.id ? Number(b.id) : undefined };
   p.instrument_id = String(b.instrument_id || '').toUpperCase();
@@ -762,7 +762,7 @@ function validPosition(b) {
 }
 app.get('/api/positions', wrap((req, res) => res.json(db.listPositions(req.user.id))));
 const kickH4 = (userId) => { if (!job.running) checkPositions({ trigger: 'manual', userId }).catch((e) => console.error('[h4]', e.message)); };
-/** Pozycja musi należeć do zalogowanego użytkownika. */
+/** The position must belong to the signed-in user. */
 function ownPosition(req) {
   const pos = db.getPosition(req.params.id);
   if (!pos || pos.user_id !== req.user.id) throw Object.assign(new Error('err.notFound'), { status: 404 });
@@ -778,7 +778,7 @@ app.post('/api/positions', wrap(async (req, res) => {
   p.user_id = req.user.id;
   let quote = null;
   if (req.body?.market) {
-    // wpis „po cenie rynkowej”: cenę wejścia pobieramy z API w chwili dodania
+    // "at market" entry: the entry price is fetched from the API when the position is added
     quote = await quoteFor(db.getInstrument(p.instrument_id));
     p.entry = quote.price;
     p.opened = p.opened || new Date().toISOString().slice(0, 10);
@@ -822,14 +822,14 @@ app.delete('/api/trades/:id', wrap((req, res) => {
 app.put('/api/positions/:id', wrap((req, res) => { ownPosition(req); db.savePosition(validPosition({ ...req.body, id: req.params.id })); invalidate(); res.json({ ok: true }); }));
 app.delete('/api/positions/:id', wrap((req, res) => { const pos = ownPosition(req); db.deletePosition(pos.id); invalidate(); log(req, 'trade', 'trade.delete', { id: pos.instrument_id }); res.json({ ok: true }); }));
 
-// ---------- statyczne ----------
+// ---------- static files ----------
 app.use(express.static(path.join(ROOT, 'public'), { extensions: ['html'], maxAge: 0 }));
 app.use('/api', (req, res) => res.status(404).json({ error: 'err.notFound' }));
 
 app.listen(PORT, HOST, () => {
   db.addLog({ category: 'system', code: 'system.start', params: { version: VERSION } });
-  console.log(`KumoDesk ${VERSION} – http://${HOST}:${PORT} (dane: ${DATA_DIR})`);
+  console.log(`KumoDesk ${VERSION} – http://${HOST}:${PORT} (data: ${DATA_DIR})`);
   if (process.env.KUMODESK_NO_SCHEDULER !== '1') startScheduler();
-  // doliczenie sygnałów w tle (przy pierwszym uruchomieniu: ostatni rok)
+  // add signals in the background (on first run: the last year)
   if (process.env.KUMODESK_NO_SIGNALS !== '1') setTimeout(() => updateSignals().then(() => invalidate()).catch((e) => console.error('[signals]', e.message)), 3000);
 });

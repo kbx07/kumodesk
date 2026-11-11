@@ -1,4 +1,4 @@
-// Czas lokalny w strefach grup czasowych (bez zewnętrznych bibliotek).
+// Local time in the time zones of the time groups (no external libraries).
 
 const fmtCache = new Map();
 function fmt(tz) {
@@ -17,7 +17,7 @@ export function isValidTimezone(tz) {
   try { new Intl.DateTimeFormat('en-CA', { timeZone: tz }); return true; } catch { return false; }
 }
 
-/** Lokalna data/godzina w strefie tz. */
+/** Local date and time in the zone tz. */
 export function localParts(tz, now = new Date()) {
   const p = {};
   for (const part of fmt(tz).formatToParts(now)) p[part.type] = part.value;
@@ -37,42 +37,42 @@ export function hhmmToMinutes(s) {
   return v >= 0 && v < 1440 ? v : null;
 }
 
-/** Czy świeca dzienna o dacie barDate jest już zamknięta dla danej grupy. */
+/** Whether the daily candle dated barDate is already closed for the given group. */
 export function isBarClosed(barDate, group, now = new Date()) {
   const lp = localParts(group.timezone, now);
   if (barDate < lp.date) return true;
   if (barDate > lp.date) return false;
   const close = hhmmToMinutes(group.close_time) ?? 1439;
-  // Koniec handlu 00:00 oznacza północ kończącą dzień (rynki całodobowe, np. krypto):
-  // świeca z bieżącej daty jeszcze trwa, zamknięta jest dopiero wczorajsza.
+  // End of trading 00:00 means the midnight that ends the day (round-the-clock markets such as crypto):
+  // the candle of the current date is still open; only yesterday's is closed.
   if (close === 0) return false;
   return lp.minutes >= close;
 }
 
-/** Czy grupa powinna zostać teraz uruchomiona (po zamknięciu + opóźnienie, raz dziennie). */
+/** Whether the group should run now (after close + delay, once a day). */
 export function groupDue(group, now = new Date()) {
   if (!group.enabled) return false;
   const lp = localParts(group.timezone, now);
   const days = String(group.days || '1,2,3,4,5').split(',').map(Number);
   if (!days.includes(lp.weekday)) return false;
   const runAt = (hhmmToMinutes(group.close_time) ?? 0) + (group.delay_min || 0);
-  if (runAt >= 1440) return false; // konfiguracja bez sensu – pomijamy
+  if (runAt >= 1440) return false; // nonsensical configuration – skip
   if (lp.minutes < runAt) return false;
   return group.last_run_date !== lp.date;
 }
 
-/** Najbliższe uruchomienie grupy jako Date (przybliżenie minutowe, do wyświetlania). */
+/** The group's next run as a Date (minute precision, for display). */
 export function nextRun(group, now = new Date()) {
   if (!group.enabled) return null;
   const runAt = (hhmmToMinutes(group.close_time) ?? 0) + (group.delay_min || 0);
   const days = String(group.days || '1,2,3,4,5').split(',').map(Number);
   const start = Math.floor(now.getTime() / 60000) * 60000;
-  // szukamy do 8 dni w przód, krokiem 1 min wokół spodziewanej godziny
+  // search up to 8 days ahead around the expected time
   const lp0 = localParts(group.timezone, now);
   let delta = runAt - lp0.minutes;
   for (let d = 0; d < 8; d++) {
     const cand = new Date(start + (delta + d * 1440) * 60000);
-    // korekta DST: dosuń do faktycznej godziny lokalnej
+    // DST correction: shift to the actual local time
     const lp = localParts(group.timezone, cand);
     const fix = runAt - lp.minutes;
     const c2 = Math.abs(fix) <= 120 ? new Date(cand.getTime() + fix * 60000) : cand;

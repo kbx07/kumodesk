@@ -1,4 +1,4 @@
-// Kody jednorazowe TOTP (RFC 6238: HMAC-SHA1, 30 s, 6 cyfr) – zgodne z Google Authenticator i podobnymi.
+// TOTP one-time codes (RFC 6238: HMAC-SHA1, 30 s, 6 digits) – compatible with Google Authenticator and similar apps.
 import crypto from 'node:crypto';
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -25,7 +25,7 @@ export function base32Decode(str) {
 
 export const newSecret = () => base32Encode(crypto.randomBytes(20));
 
-/** Kod dla danego licznika (numeru 30-sekundowego okna). */
+/** Code for a given counter (the number of the 30-second window). */
 export function codeAt(secret, counter) {
   const msg = Buffer.alloc(8);
   msg.writeBigUInt64BE(BigInt(counter));
@@ -36,8 +36,8 @@ export function codeAt(secret, counter) {
 }
 
 /**
- * Sprawdza kod z tolerancją ±1 okna. Zwraca numer okna, w którym kod pasuje, albo null.
- * lastCounter chroni przed ponownym użyciem tego samego kodu.
+ * Verifies a code with a tolerance of ±1 window. Returns the matching window number, or null.
+ * lastCounter prevents the same code from being used twice.
  */
 export function verify(secret, code, { now = Date.now(), lastCounter = -1 } = {}) {
   const c = String(code || '').replace(/\s/g, '');
@@ -55,6 +55,6 @@ export function verify(secret, code, { now = Date.now(), lastCounter = -1 } = {}
 export const otpauthUrl = (secret, account, issuer = 'KumoDesk') =>
   `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(account)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
 
-/** Dziesięć kodów zapasowych w postaci xxxx-xxxx. */
+/** Ten recovery codes in the form xxxx-xxxx. */
 export const newRecoveryCodes = () => Array.from({ length: 10 }, () => { const h = crypto.randomBytes(4).toString('hex'); return `${h.slice(0, 4)}-${h.slice(4)}`; });
 export const hashCode = (c) => crypto.createHash('sha256').update(String(c).toLowerCase().replace(/[^0-9a-f]/g, '')).digest('hex');

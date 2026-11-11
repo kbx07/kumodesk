@@ -1,5 +1,5 @@
-// Słownik PL / DE / EN – wspólny dla przeglądarki i serwera (e-maile).
-// Składnia: {nazwa} wstawia parametr, {przestrzen:nazwa} tłumaczy kod, np. {dir:dir} -> dir.LONG.
+// PL / DE / EN dictionary – shared by the browser and the server (e-mails).
+// Syntax: {name} inserts a parameter, {namespace:name} translates a code, e.g. {dir:dir} -> dir.LONG.
 
 const pl = {
   loading: 'Wczytywanie…', saved: 'Zapisano', save: 'Zapisz', cancel: 'Anuluj', delete: 'Usuń', edit: 'Edytuj', disabled: 'wyłączona',
@@ -840,7 +840,7 @@ export function resolveLang(l) {
   return s === 'pl' || s === 'de' ? s : 'en';
 }
 
-/** Język z preferencji przeglądarki: decyduje pierwsza (główna) pozycja listy. */
+/** Language from the browser preferences: the first (primary) entry of the list decides. */
 export function detectLang(list) {
   const first = Array.isArray(list) ? list[0] : list;
   return resolveLang(first);
@@ -859,7 +859,7 @@ export function t(lang, key, params = {}) {
   });
 }
 
-/** Cena z liczbą miejsc zależną od wielkości. */
+/** Price with a number of decimals that depends on its magnitude. */
 export function fmtPrice(v) {
   if (v == null || !Number.isFinite(Number(v))) return '–';
   const a = Math.abs(v);

@@ -1,4 +1,4 @@
-// Service worker KumoDesk: wyłącznie powiadomienia push (bez pamięci podręcznej – dane mają być zawsze świeże).
+// KumoDesk service worker: push notifications only (no caching – data must always be fresh).
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener('push', (e) => {

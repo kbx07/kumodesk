@@ -1,20 +1,20 @@
-// Prowadzenie otwartych pozycji na świecach H4: co zrobić dalej z pozycją.
+// Managing open positions on H4 candles: what to do next with a position.
 import { computeIchimoku, computeATR, scoreAt } from './ichimoku.js';
 
 const round = (x, d = 2) => (x == null || !Number.isFinite(x) ? null : Math.round(x * 10 ** d) / 10 ** d);
 
-/** Tylko zamknięte świece H4 (przedział czterogodzinny już minął). */
+/** Closed H4 candles only (the four-hour window has passed). */
 export function closedH4(bars, now = new Date()) {
   const nowSec = now.getTime() / 1000;
   return bars.filter((b) => b.ts + 14400 <= nowSec);
 }
 
 /**
- * Porada dla pozycji.
+ * Advice for a position.
  *  pos      – { direction, entry, stop }
- *  d1       – ocena dzienna instrumentu (z analyzeMarket) albo null
- *  h4bars   – zamknięte świece H4
- * Zwraca { action, reason, ... }; action: HOLD | TRAIL | PARTIAL | TIGHTEN | REDUCE | EXIT | NO_DATA.
+ *  d1       – the instrument's daily analysis (from analyzeMarket) or null
+ *  h4bars   – closed H4 candles
+ * Returns { action, reason, ... }; action: HOLD | TRAIL | PARTIAL | TIGHTEN | REDUCE | EXIT | NO_DATA.
  */
 export function advisePosition(pos, d1, h4bars, settings) {
   const p = settings.ichimoku;
@@ -27,7 +27,7 @@ export function advisePosition(pos, d1, h4bars, settings) {
   const atr = computeATR(h4bars, p.atr)[i];
   const sign = pos.direction === 'LONG' ? 1 : -1;
   const close = s.close;
-  const sd = sign * s.score;                         // wynik H4 widziany od strony pozycji
+  const sd = sign * s.score;                         // H4 score seen from the position's side
   const ext = atr ? (sign * (close - s.kijun)) / atr : 0;
   const d1state = !d1 || !d1.ok ? 'UNKNOWN' : d1.dir === pos.direction ? 'WITH' : d1.dir === 'NEUTRAL' ? 'NEUTRAL' : 'AGAINST';
 
@@ -48,7 +48,7 @@ export function advisePosition(pos, d1, h4bars, settings) {
   else if (sd >= 4) { action = 'HOLD'; reason = 'trendIntact'; }
   else { action = 'HOLD'; reason = 'h4Neutral'; }
 
-  // Proponowany stop: tylko w stronę zysku i tylko po właściwej stronie ceny.
+  // Suggested stop: only in the direction of profit and only on the right side of price.
   let suggestedStop = null;
   if (action !== 'EXIT' && atr) {
     let cand;
@@ -74,5 +74,5 @@ export function advisePosition(pos, d1, h4bars, settings) {
   };
 }
 
-/** Kolejność pilności – do sortowania i tonu powiadomień. */
+/** Urgency order – for sorting and notification tone. */
 export const ACTION_RANK = { EXIT: 5, REDUCE: 4, TIGHTEN: 3, PARTIAL: 2, TRAIL: 1, HOLD: 0, NO_DATA: 0 };

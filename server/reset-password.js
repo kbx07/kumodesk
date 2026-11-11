@@ -1,4 +1,4 @@
-// Awaryjna zmiana hasła z wiersza poleceń:  node server/reset-password.js <login> <nowe-haslo>
+// Emergency password change from the command line:  node server/reset-password.js <username> <new-password>
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as db from './db.js';

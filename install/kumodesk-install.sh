@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# KumoDesk – instalacja wewnątrz kontenera / maszyny z Debianem lub Ubuntu.
-# Wywoływany przez ct/kumodesk.sh; można też uruchomić ręcznie:
+# KumoDesk – installation inside a Debian or Ubuntu container / machine.
+# Called by ct/kumodesk.sh; it can also be run by hand:
 #   curl -fsSL https://raw.githubusercontent.com/kbx07/kumodesk/main/install/kumodesk-install.sh | bash
 set -euo pipefail
 
@@ -17,7 +17,7 @@ echo "==> System packages"
 apt-get update -qq
 apt-get install -y -qq curl ca-certificates git gnupg >/dev/null
 
-# Node.js 22 LTS (aplikacja używa wbudowanego node:sqlite – wymaga >= 22.13)
+# Node.js 22 LTS (the app uses the built-in node:sqlite – needs >= 22.13)
 need_node=1
 if command -v node >/dev/null; then
   node -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a===22&&b>=13)?0:1)' && need_node=0
@@ -69,7 +69,7 @@ PrivateTmp=true
 WantedBy=multi-user.target
 EOF
 
-# Polecenie `update` – jak w skryptach community-scripts.
+# The `update` command – as in the community-scripts.
 cat > /usr/local/bin/update <<EOF
 #!/usr/bin/env bash
 set -euo pipefail

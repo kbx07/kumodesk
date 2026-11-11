@@ -1,7 +1,7 @@
 {
   "name": "kumodesk",
   "version": "2.5.0",
-  "description": "Panel decyzyjny Ichimoku D1: sila walut, rezim rynku, ranking setupow, alerty e-mail. Nie sklada zlecen.",
+  "description": "Ichimoku D1 decision desk: currency strength, market regime, setup ranking, e-mail alerts. Never places orders.",
   "type": "module",
   "main": "server/index.js",
   "scripts": {

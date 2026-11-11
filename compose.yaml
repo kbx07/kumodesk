@@ -1,6 +1,6 @@
 # KumoDesk – Docker Compose
 #   docker compose up -d
-# Aby zbudować obraz lokalnie zamiast pobierać gotowy:  docker compose up -d --build
+# To build the image locally instead of pulling it:  docker compose up -d --build
 services:
   kumodesk:
     image: ghcr.io/kbx07/kumodesk:latest

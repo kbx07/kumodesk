@@ -1,4 +1,4 @@
-// Wykres Ichimoku na <canvas>: świece, Tenkan, Kijun, Chikou, chmura (także przyszła) + celownik.
+// Ichimoku chart on <canvas>: candles, Tenkan, Kijun, Chikou, cloud (including the future cloud) + crosshair.
 import { fmtPrice } from './i18n.js';
 
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -39,7 +39,7 @@ export function drawIchimoku(canvas, tip, data, labels, visible = 150) {
     const x = (i) => pad.l + (i - from + 0.5) * step;
     const y = (v) => pad.t + (hi - v) / (hi - lo) * ph;
 
-    // siatka pozioma + oś cen
+    // horizontal grid + price axis
     ctx.font = '11px system-ui, sans-serif'; ctx.textBaseline = 'middle';
     const ticks = 6;
     for (let k = 0; k <= ticks; k++) {
@@ -47,10 +47,10 @@ export function drawIchimoku(canvas, tip, data, labels, visible = 150) {
       ctx.strokeStyle = C.grid; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(w - pad.r, yy); ctx.stroke();
       ctx.fillStyle = C.muted; ctx.textAlign = 'left'; ctx.fillText(fmtPrice(v), w - pad.r + 6, yy);
     }
-    // oś czasu (początki miesięcy)
+    // time axis (month starts)
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     let lastLabelX = -100;
-    const intraday = bars[0].date.length > 10; // H4: podpisy dni, D1: podpisy miesięcy
+    const intraday = bars[0].date.length > 10; // H4: day labels, D1: month labels
     const keyLen = intraday ? 10 : 7, minGap = intraday ? 64 : 46;
     for (let i = from + 1; i < n; i++) {
       if (bars[i].date.slice(0, keyLen) !== bars[i - 1].date.slice(0, keyLen) && x(i) - lastLabelX > minGap) {
@@ -58,11 +58,11 @@ export function drawIchimoku(canvas, tip, data, labels, visible = 150) {
         lastLabelX = x(i);
       }
     }
-    // granica „dziś”
+    // "today" boundary
     ctx.strokeStyle = C.axis; ctx.setLineDash([3, 4]); ctx.beginPath();
     ctx.moveTo(x(n - 1) + step / 2, pad.t); ctx.lineTo(x(n - 1) + step / 2, h - pad.b); ctx.stroke(); ctx.setLineDash([]);
 
-    // chmura: wypełnienie odcinkami, kolor wg tego, która linia jest wyżej
+    // cloud: filled segment by segment, coloured by which line is on top
     for (let i = from; i < n + shift - 1; i++) {
       const a0 = cloudA[i], b0 = cloudB[i], a1 = cloudA[i + 1], b1 = cloudB[i + 1];
       if (a0 == null || b0 == null || a1 == null || b1 == null) continue;
@@ -81,7 +81,7 @@ export function drawIchimoku(canvas, tip, data, labels, visible = 150) {
     };
     line(cloudA, C.up, 1, n + shift); line(cloudB, C.down, 1, n + shift);
 
-    // świece
+    // candles
     const bw = Math.max(1, Math.min(9, step * 0.64));
     for (let i = from; i < n; i++) {
       const b = bars[i], col = b.c >= b.o ? C.up : C.down;
@@ -89,19 +89,19 @@ export function drawIchimoku(canvas, tip, data, labels, visible = 150) {
       ctx.beginPath(); ctx.moveTo(x(i), y(b.h)); ctx.lineTo(x(i), y(b.l)); ctx.stroke();
       const top = y(Math.max(b.o, b.c)), bh = Math.max(1, Math.abs(y(b.o) - y(b.c)));
       if (openBar && i === n - 1) {
-        // świeca w toku: sam obrys, żeby odróżnić ją od zamkniętych
+        // candle in progress: outline only, to tell it apart from closed ones
         ctx.fillStyle = C.surface; ctx.fillRect(x(i) - bw / 2, top, bw, bh);
         ctx.strokeRect(x(i) - bw / 2 + 0.5, top + 0.5, Math.max(1, bw - 1), Math.max(1, bh - 1));
       } else ctx.fillRect(x(i) - bw / 2, top, bw, bh);
     }
     line(tenkan, C.tenkan, 2, n); line(kijun, C.kijun, 2, n);
-    // Chikou: zamknięcie przesunięte wstecz o `shift`
+    // Chikou: the close shifted back by `shift`
     ctx.strokeStyle = C.chikou; ctx.lineWidth = 1.5; ctx.beginPath();
     let st = false;
     for (let i = from + shift; i < n; i++) { const xx = x(i - shift), yy = y(bars[i].c); if (!st) { ctx.moveTo(xx, yy); st = true; } else ctx.lineTo(xx, yy); }
     ctx.stroke();
 
-    // celownik
+    // crosshair
     if (hover != null) {
       const i = hover;
       ctx.strokeStyle = C.muted; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);

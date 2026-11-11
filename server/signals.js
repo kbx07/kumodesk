@@ -1,26 +1,26 @@
-// Śledzenie sygnałów: kiedy instrument dostał „zielone światło” (decyzja GRAJ) i jak skończyłoby się
-// wejście zaraz po sygnale zgodnie z planem. Służy do oceny skuteczności algorytmu.
+// Signal tracking: when an instrument got the "green light" (TRADE decision) and how entering
+// right after the signal, following the plan, would have ended. Used to measure the algorithm's accuracy.
 //
-// Reguły (uzgodnione z użytkownikiem):
-//   wejście  – po zamknięciu świecy, na której pojawił się sygnał (cena zamknięcia),
-//   stop     – stop z planu z dnia sygnału,
-//   koniec   – świeca narusza stop (wynik −1R) albo kierunek wygasa lub się odwraca (wynik po zamknięciu),
-//   „rację”  – algorytm miał, gdy wynik zagrania jest dodatni.
+// Rules:
+//   entry – after the close of the candle on which the signal appeared (closing price),
+//   stop  – the plan's stop on the signal day,
+//   end   – a candle breaches the stop (result −1R) or the direction fades or reverses (result at the close),
+//   right – the algorithm was right when the trade's result is positive.
 import * as db from './db.js';
 import { analyzeMarket } from './analysis.js';
 
 const round = (x, d = 2) => (x == null || !Number.isFinite(x) ? null : Math.round(x * 10 ** d) / 10 ** d);
 
-/** Wynik w R pozycji otwartej po `entry` ze stopem `stop`, liczony do ceny `price`. */
+/** Result in R of a position opened at `entry` with stop `stop`, measured to `price`. */
 export function resultR(dir, entry, stop, price) {
   const risk = Math.abs(entry - stop);
   return risk ? ((dir === 'LONG' ? 1 : -1) * (price - entry)) / risk : 0;
 }
 
 /**
- * Jeden krok automatu dla jednego instrumentu i jednej nowej świecy.
- *   open – otwarty sygnał albo null; a – analiza instrumentu na tej świecy; bar – ta świeca.
- * Zwraca { close: {...} | null, open: {...} | null } – co zamknąć i co otworzyć.
+ * One step of the state machine for one instrument and one new candle.
+ *   open – the open signal or null; a – the instrument's analysis on this candle; bar – this candle.
+ * Returns { close: {...} | null, open: {...} | null } – what to close and what to open.
  */
 export function stepSignal(open, a, bar) {
   let close = null, cur = open;
@@ -33,7 +33,7 @@ export function stepSignal(open, a, bar) {
   let next = null;
   if (!cur && a.action === 'PLAY' && a.plan?.params?.stop != null) {
     const stop = a.plan.params.stop;
-    // stop musi leżeć po stronie straty – inaczej sygnał nie nadaje się do śledzenia
+    // the stop must be on the losing side – otherwise the signal cannot be tracked
     if (a.dir === 'LONG' ? stop < bar.c : stop > bar.c) next = { dir: a.dir, grade: a.grade, entry: bar.c, stop };
   }
   return { close, open: next };
@@ -43,8 +43,8 @@ let running = false;
 export const signalsBusy = () => running;
 
 /**
- * Dolicza sygnały za dni, których jeszcze nie przetworzono (przy pierwszym uruchomieniu: ostatni rok).
- * Dzień jest przetwarzany dopiero, gdy się skończył (UTC), bo wtedy wszystkie rynki mają już jego świecę.
+ * Adds signals for days not processed yet (on first run: the last year).
+ * A day is processed only once it has ended (UTC), because by then every market has its candle.
  */
 export async function updateSignals({ days = 370, now = new Date() } = {}) {
   if (running) return { skipped: true };
@@ -76,19 +76,19 @@ export async function updateSignals({ days = 370, now = new Date() } = {}) {
       const market = analyzeMarket({ instruments, candlesById: slice, groupsById, positions: [], settings, now: new Date(Date.parse(d + 'T00:00:00Z') + 2 * 86400000) });
       for (const a of market.instruments) {
         const bar = barOf[a.id];
-        if (!a.ok || !bar) continue; // brak nowej świecy tego dnia (święto, weekend)
+        if (!a.ok || !bar) continue; // no new candle that day (holiday, weekend)
         const step = stepSignal(open[a.id] || null, a, bar);
         if (step.close) { db.closeSignal(open[a.id].id, { closed: d, ...step.close }); delete open[a.id]; closed++; }
         if (step.open) { const id = db.openSignal({ instrument_id: a.id, opened: d, ...step.open }); open[a.id] = { id, instrument_id: a.id, opened: d, ...step.open }; opened++; }
       }
       db.setMeta('signalsThrough', d);
-      await new Promise((r) => setImmediate(r)); // nie blokujemy serwera podczas przeliczania roku wstecz
+      await new Promise((r) => setImmediate(r)); // do not block the server while replaying a year
     }
     return { processed: dates.length, opened, closed };
   } finally { running = false; }
 }
 
-/** Statystyka skuteczności z zakończonych sygnałów. */
+/** Accuracy statistics from finished signals. */
 export function signalStats(list) {
   const done = list.filter((s) => s.closed);
   const agg = (rows) => {

@@ -1,5 +1,5 @@
-// Warstwa rynkowa: z ocen Ichimoku pojedynczych instrumentów buduje obraz całego rynku.
-// Zwraca wyłącznie kody i liczby – teksty powstają w słowniku (public/i18n.js).
+// Market layer: builds a picture of the whole market from the Ichimoku scores of single instruments.
+// Returns only codes and numbers – texts come from the dictionary (public/i18n.js).
 import { computeIchimoku, computeATR, scoreAt, toWeekly, direction } from './ichimoku.js';
 import { CURRENCIES, BASKETS } from './defaults.js';
 import { isBarClosed } from './timeutil.js';
@@ -10,7 +10,7 @@ const mean = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
 const stdev = (a) => { const m = mean(a); return a.length ? Math.sqrt(mean(a.map((x) => (x - m) ** 2))) : 0; };
 const GRADE_RANK = { A: 3, B: 2, C: 1, D: 0 };
 
-/** Ocena pojedynczego instrumentu na D1 i W1. bars = tylko zamknięte świece. */
+/** Analysis of a single instrument on D1 and W1. bars = closed candles only. */
 export function analyzeInstrument(inst, bars, settings) {
   const p = settings.ichimoku;
   const thr = settings.scoring.dirThreshold;
@@ -25,7 +25,7 @@ export function analyzeInstrument(inst, bars, settings) {
   const d1 = scoreAt(bars, ich, i);
   if (!d1) return { ...base, ok: false, reason: 'NO_DATA', bars: bars.length, needed: minBars };
 
-  // historia wyniku (do wykresu i do liczenia „od ilu świec trwa kierunek”)
+  // score history (for the chart and for counting how many candles the direction has held)
   const history = [];
   for (let j = Math.max(minBars - 1, i - 89); j <= i; j++) {
     const s = scoreAt(bars, ich, j);
@@ -66,11 +66,11 @@ export function analyzeInstrument(inst, bars, settings) {
   };
 }
 
-/** Czy kierunek setupu zgadza się z klimatem (risk-on / risk-off): WITH | AGAINST | NA. */
+/** Whether the setup's direction agrees with the climate (risk-on / risk-off): WITH | AGAINST | NA. */
 export function climateFit(a, climate) {
   if (a.dir === 'NEUTRAL' || climate.quality === 'LOW' || (climate.mood !== 'RISK_ON' && climate.mood !== 'RISK_OFF')) return 'NA';
   const bucket = (c) => (BASKETS.CARRY.includes(c) ? 1 : BASKETS.SAFE.includes(c) ? -1 : 0);
-  let exposure = 0; // +1 = instrument rośnie przy apetycie na ryzyko
+  let exposure = 0; // +1 = the instrument rises with risk appetite
   if (a.class === 'fx') exposure = Math.sign(bucket(a.base) - bucket(a.quote));
   else if (a.class === 'index' || a.class === 'stock' || a.class === 'crypto') exposure = 1;
   if (!exposure) return 'NA';
@@ -78,7 +78,7 @@ export function climateFit(a, climate) {
   return (a.dir === 'LONG' ? 1 : -1) * exposure * want > 0 ? 'WITH' : 'AGAINST';
 }
 
-// Spółka powinna iść w tę samą stronę co jej indeks – to jej odpowiednik symetrii walutowej.
+// A stock should move the same way as its index – its equivalent of currency symmetry.
 const STOCK_INDEX = { dax: 'DAX', sp500: 'SPX' };
 
 function gradeSetup(a, strength, settings, climate, indexDir = {}) {
@@ -96,7 +96,7 @@ function gradeSetup(a, strength, settings, climate, indexDir = {}) {
     else if (spread >= sc.strongCurrency * 1.5) { sym = 'MIXED'; op += 1.25; }
     else sym = 'WEAK';
   } else {
-    op *= 10 / 7.5; // instrumenty bez symetrii walutowej: ta sama skala 0–10
+    op *= 10 / 7.5; // instruments without currency symmetry: same 0–10 scale
     const idx = a.class === 'stock' ? STOCK_INDEX[a.category] : null;
     if (idx && indexDir[idx]) {
       a.refIndex = idx;
@@ -104,7 +104,7 @@ function gradeSetup(a, strength, settings, climate, indexDir = {}) {
     }
   }
   const absExt = Math.abs(a.ext);
-  const stretched = sign * a.ext > 0; // rozciągnięcie w kierunku sygnału
+  const stretched = sign * a.ext > 0; // stretched in the signal's direction
   let over = 'OK';
   if (stretched && absExt > sc.extMax) { over = 'HOT'; op -= 2; }
   else if (stretched && absExt > sc.extWarn) { over = 'WARM'; op -= 1; }
@@ -114,17 +114,17 @@ function gradeSetup(a, strength, settings, climate, indexDir = {}) {
   if (a.align === 'CONFLICT' || over === 'HOT' || a.cloudPos === 0) risk = 'HIGH';
   else if (a.align === 'FULL' && over === 'OK' && a.thick >= 0.5) risk = 'LOW';
 
-  // Klasa A wymaga kompletu potwierdzeń: W1 zgodny, cena po właściwej stronie chmury,
-  // Chikou potwierdza, symetria czysta (FX), brak przegrzania.
+  // Grade A needs every confirmation: W1 agrees, price on the right side of the cloud,
+  // Chikou confirms, clean symmetry (FX), not overextended.
   const chikou = a.components.find((c) => c.key === 'chikou')?.value ?? 0;
   const confirmed = a.cloudPos === sign && chikou === sign;
   let grade = 'D';
   if (op >= 8 && a.align === 'FULL' && confirmed && (sym === 'CLEAN' || sym === 'NA') && over === 'OK') grade = 'A';
   else if (op >= 6.5 && a.align !== 'CONFLICT') grade = 'B';
   else if (op >= 5) grade = 'C';
-  // Słaba symetria: para nie ma poparcia w koszyku walut – najwyżej obserwacja.
+  // Weak symmetry: the pair has no backing in the currency basket – watch at most.
   if (sym === 'WEAK' && (grade === 'A' || grade === 'B')) grade = 'C';
-  // Gra pod prąd klimatu nie może być setupem głównym.
+  // A trade against the climate cannot be a primary setup.
   const fit = climateFit(a, climate);
   if (fit === 'AGAINST' && grade === 'A') grade = 'B';
 
@@ -187,8 +187,8 @@ function portfolioState(positions, byId, settings) {
 }
 
 /**
- * Główna funkcja: instruments = lista z bazy, candlesById = {id: bars},
- * groupsById = {id: group}. Analizowane są wyłącznie zamknięte świece.
+ * Main function: instruments = list from the database, candlesById = {id: bars},
+ * groupsById = {id: group}. Only closed candles are analysed.
  */
 export function analyzeMarket({ instruments, candlesById, groupsById, positions, settings, sessions = null, now = new Date() }) {
   const items = [];
@@ -201,13 +201,13 @@ export function analyzeMarket({ instruments, candlesById, groupsById, positions,
   }
   const ok = items.filter((x) => x.ok);
   const fx = ok.filter((x) => x.class === 'fx');
-  // Obraz rynku (struktura, zgodność, Matrix) liczymy z walut, metali i indeksów.
-  // Pojedyncze spółki dostają własne oceny, ale nie zmieniają oceny całego rynku.
+  // The market picture (structure, alignment, Matrix) is calculated from currencies, metals and indices.
+  // Single stocks get their own grades but do not change the market-wide rating.
   const single = (x) => x.class === 'stock' || x.class === 'etf' || x.class === 'crypto';
   const hasMacro = ok.some((x) => !single(x));
   const macro = hasMacro ? ok.filter((x) => !single(x)) : ok;
 
-  // --- siła walut ---
+  // --- currency strength ---
   const acc = {};
   for (const a of fx) {
     (acc[a.base] ||= []).push(a.d1);
@@ -219,7 +219,7 @@ export function analyzeMarket({ instruments, candlesById, groupsById, positions,
     .map(([currency, value]) => ({ currency, value, pairs: acc[currency].length }))
     .sort((x, y) => y.value - x.value);
 
-  // --- reżim (na podstawie FX; gdy brak FX – całego rynku) ---
+  // --- regime (from FX; without FX – from the whole market) ---
   const pool = fx.length >= 6 ? fx : macro;
   const trendShare = pool.length ? pool.filter((a) => Math.abs(a.d1) >= 7).length / pool.length : 0;
   const neutralShare = pool.length ? pool.filter((a) => a.dir === 'NEUTRAL').length / pool.length : 1;
@@ -228,7 +228,7 @@ export function analyzeMarket({ instruments, candlesById, groupsById, positions,
   if (trendShare >= 0.45 && (fx.length < 6 || dispersion >= 3.5)) regime = 'TREND';
   else if (trendShare < 0.2 && neutralShare >= 0.5) regime = 'RANGE';
 
-  // --- klimat (koszyki walutowe + indeksy) ---
+  // --- climate (currency baskets + indices) ---
   const basket = {};
   for (const [k, list] of Object.entries(BASKETS)) {
     const vals = list.map((c) => strength[c]).filter((v) => v != null);
@@ -252,11 +252,11 @@ export function analyzeMarket({ instruments, candlesById, groupsById, positions,
   }
   const climate = { basket, dominant, appetite, indices: idxAvg, mood, quality };
 
-  // --- oceny setupów ---
+  // --- setup grades ---
   const indexDir = Object.fromEntries(ok.filter((x) => x.class === 'index').map((x) => [x.id, x.dir]));
   for (const a of ok) Object.assign(a, gradeSetup(a, strength, settings, climate, indexDir));
 
-  // --- jakość struktury ---
+  // --- structure quality ---
   const cls = (a) => (a.dir !== 'NEUTRAL' && a.align === 'FULL' && a.cloudPos !== 0 ? 'CLEAN'
     : a.dir === 'NEUTRAL' || a.align === 'CONFLICT' ? 'WEAK' : 'MIXED');
   const counts = { CLEAN: 0, MIXED: 0, WEAK: 0 };
@@ -268,7 +268,7 @@ export function analyzeMarket({ instruments, candlesById, groupsById, positions,
     quality: round((10 * (counts.CLEAN + 0.5 * counts.MIXED)) / n, 1),
   };
 
-  // --- portfel ---
+  // --- portfolio ---
   const byId = Object.fromEntries(items.map((a) => [a.id, a]));
   const portfolio = portfolioState(positions || [], byId, settings);
 
@@ -286,12 +286,12 @@ export function analyzeMarket({ instruments, candlesById, groupsById, positions,
   let mode = exec === 'OFFENSIVE' ? 'ATTACK' : exec === 'SELECTIVE' ? 'SELECTIVE' : 'PROTECT';
   if (portfolio.state === 'BLOCK') { exec = 'DEFENSIVE'; mode = 'PROTECT'; }
 
-  // --- rekomendacje i plan ---
+  // --- decisions and plan ---
   for (const a of ok) {
     a.action = a.grade === 'A' ? 'PLAY' : a.grade === 'B' ? (exec === 'DEFENSIVE' ? 'WATCH' : 'PLAY') : a.grade === 'C' ? 'WATCH' : 'WAIT';
     if (portfolio.state === 'BLOCK' && a.action === 'PLAY') a.action = 'WATCH';
     a.plan = buildPlan(a, a);
-    // ostrzeżenie o koncentracji: nowa pozycja pogłębiłaby istniejącą ekspozycję
+    // concentration warning: a new position would deepen existing exposure
     a.concentration = null;
     if (a.class === 'fx' && a.dir !== 'NEUTRAL') {
       const s = a.dir === 'LONG' ? 1 : -1;
@@ -301,11 +301,11 @@ export function analyzeMarket({ instruments, candlesById, groupsById, positions,
     }
     a.inPortfolio = portfolio.positions.some((p) => p.instrument_id === a.id);
   }
-  // ranking: klasa, okazja, siła W1, czystość symetrii, a przy remisie bliżej Kijun (lepszy stosunek zysku do ryzyka)
+  // ranking: grade, opportunity, W1 strength, symmetry, and on a tie closer to Kijun (better reward to risk)
   const ranked = ok.filter((a) => a.dir !== 'NEUTRAL').sort((x, y) =>
     GRADE_RANK[y.grade] - GRADE_RANK[x.grade] || y.op - x.op || Math.abs(y.d1) - Math.abs(x.d1) || Math.abs(y.w1 ?? 0) - Math.abs(x.w1 ?? 0) ||
     (y.spread ?? 0) - (x.spread ?? 0) || Math.abs(x.ext) - Math.abs(y.ext) || x.id.localeCompare(y.id));
-  // korelacja: słabszy setup grający tę samą walutę w tę samą stronę co lepszy
+  // correlation: a weaker setup trading the same currency in the same direction as a better one
   const legs = {};
   for (const a of ranked) {
     a.correlated = null;
@@ -319,7 +319,7 @@ export function analyzeMarket({ instruments, candlesById, groupsById, positions,
   }
   const primary = ranked.find((a) => a.grade !== 'D') || null;
 
-  // --- lejek: droga każdego instrumentu przez kolejne etapy ---
+  // --- funnel: each instrument's path through the stages ---
   for (const a of items) {
     a.funnel = buildFunnel(a, { climate, portfolio, exec, sessions });
     a.failedAt = a.funnel.find((s) => s.status === 'FAIL')?.key ?? null;
@@ -331,7 +331,7 @@ export function analyzeMarket({ instruments, candlesById, groupsById, positions,
     return { key, in: entered, out: alive, dropped: entered - alive, warned: items.filter((a) => a.funnel[i].status === 'WARN' && !a.funnel.slice(0, i + 1).some((s) => s.status === 'FAIL')).length };
   });
 
-  // --- alignment i symetria rynku (kafelki nagłówka) ---
+  // --- market alignment and symmetry (header tiles) ---
   const directional = macro.filter((a) => a.dir !== 'NEUTRAL');
   const alignShare = directional.length ? directional.filter((a) => a.align === 'FULL').length / directional.length : 0;
   const conflictShare = directional.length ? directional.filter((a) => a.align === 'CONFLICT').length / directional.length : 0;
@@ -340,7 +340,7 @@ export function analyzeMarket({ instruments, candlesById, groupsById, positions,
   const cleanShare = fxDir.length ? fxDir.filter((a) => a.sym === 'CLEAN').length / fxDir.length : 0;
   const symState = !fxDir.length ? 'NA' : cleanShare >= 0.5 ? 'CLEAN' : cleanShare >= 0.2 ? 'MIXED' : 'WEAK';
 
-  // --- notatki ---
+  // --- notes ---
   const notes = [];
   notes.push({ code: `note.regime.${regime}`, params: { trend: Math.round(trendShare * 100), disp: round(dispersion, 1) } });
   if (strengthList.length >= 2) notes.push({ code: 'note.strength', params: { strong: strengthList[0].currency, sv: strengthList[0].value, weak: strengthList.at(-1).currency, wv: strengthList.at(-1).value } });
@@ -374,8 +374,8 @@ export function analyzeMarket({ instruments, candlesById, groupsById, positions,
 export const FUNNEL_STAGES = ['input', 'sessions', 'climate', 'selection', 'symmetry', 'synthesis', 'portfolio', 'matrix', 'decision'];
 
 /**
- * Dziewięć etapów od danych do decyzji. Każdy etap: PASS | WARN | FAIL | NA + kod powodu.
- * FAIL na dowolnym etapie oznacza, że instrument nie dochodzi do decyzji „graj”.
+ * Nine stages from data to decision. Each stage: PASS | WARN | FAIL | NA + a reason code.
+ * FAIL at any stage means the instrument does not reach the "trade" decision.
  */
 function buildFunnel(a, { climate, portfolio, exec, sessions }) {
   const st = (key, status, code, params = {}) => ({ key, status, code: code === 'skipped' ? 'funnel.skipped' : `funnel.${key}.${code}`, params });
@@ -418,7 +418,7 @@ function buildFunnel(a, { climate, portfolio, exec, sessions }) {
   return out;
 }
 
-/** Zwięzły stan do migawki i porównań (alerty). */
+/** Compact state for snapshots and comparisons (alerts). */
 export function summarize(m) {
   const grades = {};
   for (const a of m.instruments) if (a.ok) grades[a.id] = { g: a.grade, d: a.dir, op: a.op, s: a.d1, grp: a.group_id };
@@ -430,7 +430,7 @@ export function summarize(m) {
   };
 }
 
-/** Różnice między migawkami -> alerty (kody). groupId ogranicza alerty setupów do grupy. */
+/** Differences between snapshots -> alerts (codes). groupId limits setup alerts to a group. */
 export function diffAlerts(prev, cur, { minGrade = 'B', groupId = null } = {}) {
   const out = [];
   if (!prev) return out;

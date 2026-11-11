@@ -1,4 +1,4 @@
-// Powiadomienia push (Web Push, klucze VAPID generowane przy pierwszym użyciu).
+// Push notifications (Web Push; VAPID keys are generated on first use).
 import webpush from 'web-push';
 import * as db from './db.js';
 import { t, resolveLang } from '../public/i18n.js';
@@ -15,7 +15,7 @@ export function vapidPublicKey() {
   return pub;
 }
 
-/** Wysyła do wszystkich urządzeń użytkownika; make(lang) -> { title, body, url }. Wygasłe subskrypcje usuwa. */
+/** Sends to all of a user's devices; make(lang) -> { title, body, url }. Removes expired subscriptions. */
 export async function pushToUser(userId, make) {
   const subs = db.pushSubs(userId);
   if (!subs.length) return 0;
@@ -34,7 +34,7 @@ export async function pushToUser(userId, make) {
   return sent;
 }
 
-/** Te same zdarzenia co w dzwonku: alert bez właściciela idzie do wszystkich, z właścicielem tylko do niego. */
+/** The same events as the bell: an alert without an owner goes to everyone, one with an owner only to them. */
 export function pushAlerts(alerts) {
   if (!alerts.length || !db.pushSubs().length) return;
   const users = [...new Set(db.pushSubs().map((s) => s.user_id))];

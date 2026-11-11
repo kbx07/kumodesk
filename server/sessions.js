@@ -1,4 +1,4 @@
-// Przepływ sesji: jak waluty zachowywały się w ostatniej sesji Sydney / Tokio / Londyn / Nowy Jork.
+// Session flow: how currencies behaved in the latest Sydney / Tokyo / London / New York session.
 import { localParts } from './timeutil.js';
 import { BASKETS } from './defaults.js';
 
@@ -13,16 +13,16 @@ const round = (x, d = 2) => (x == null || !Number.isFinite(x) ? null : Math.roun
 const mean = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
 
 /**
- * h1ById: { id: [{ts,o,h,l,c}] } – świece godzinowe par walutowych; pairs: [{id, base, quote}].
- * Dla każdej sesji bierze jej ostatnie zakończone wystąpienie i liczy zmianę każdej pary,
- * siłę walut (średnia zmiana w % ze wszystkich par waluty) oraz nastrój.
+ * h1ById: { id: [{ts,o,h,l,c}] } – hourly candles of the currency pairs; pairs: [{id, base, quote}].
+ * For each session takes its latest finished occurrence and computes each pair's move,
+ * currency strength (mean % move across a currency's pairs) and the mood.
  */
 export function computeSessions(h1ById, pairs, now = new Date()) {
   const nowSec = now.getTime() / 1000;
   const out = [];
   for (const sess of SESSIONS) {
-    // przypisz godziny do lokalnych dni sesji (odporne na zmianę czasu)
-    const days = new Map(); // data lokalna -> { id -> [bars] }
+    // assign hours to the session's local days (robust to daylight saving changes)
+    const days = new Map(); // local date -> { id -> [bars] }
     for (const p of pairs) {
       for (const b of h1ById[p.id] || []) {
         const lp = localParts(sess.timezone, new Date(b.ts * 1000));
@@ -35,7 +35,7 @@ export function computeSessions(h1ById, pairs, now = new Date()) {
       }
     }
     const hours = (sess.close - sess.open) / 60;
-    // ostatni dzień, w którym sesja już się skończyła i ma komplet danych
+    // the latest day on which the session has finished and has complete data
     const done = [...days.entries()].filter(([, d]) => d.last + 3600 <= nowSec && d.last - d.first >= (hours - 2) * 3600).sort((a, b) => (a[0] < b[0] ? 1 : -1))[0];
     if (!done) { out.push({ key: sess.key, ok: false }); continue; }
     const [date, d] = done;
@@ -68,7 +68,7 @@ export function computeSessions(h1ById, pairs, now = new Date()) {
     });
   }
   const valid = out.filter((s) => s.ok).sort((a, b) => (a.end < b.end ? -1 : 1));
-  // podsumowanie: waluty najczęściej najsilniejsze / najsłabsze w ostatnich sesjach
+  // summary: currencies that were strongest / weakest across the recent sessions
   const tally = {};
   for (const s of valid) for (const x of s.strength) tally[x.currency] = (tally[x.currency] || 0) + x.value;
   const total = Object.entries(tally).sort((a, b) => b[1] - a[1]);
@@ -83,7 +83,7 @@ export function computeSessions(h1ById, pairs, now = new Date()) {
   };
 }
 
-/** Ile ostatnich sesji poparło kierunek setupu na danej parze. */
+/** How many recent sessions supported the setup's direction on the given pair. */
 export function sessionSupport(sessions, id, dir) {
   if (!sessions || dir === 'NEUTRAL') return null;
   const sign = dir === 'LONG' ? 1 : -1;

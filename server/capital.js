@@ -1,8 +1,8 @@
-// Kapitał i historia zagrań: wynik w R, wynik w pieniądzu, krzywa kapitału, statystyki.
+// Capital and trade history: result in R, result in money, equity curve, statistics.
 
 const round = (x, d = 2) => (x == null || !Number.isFinite(x) ? null : Math.round(x * 10 ** d) / 10 ** d);
 
-/** Wynik zagrania w jednostkach ryzyka (R) albo null, gdy brakuje wejścia lub stopu. */
+/** Trade result in risk units (R), or null when entry or stop is missing. */
 export function tradeR(direction, entry, stop, exit) {
   if (entry == null || stop == null || exit == null) return null;
   const risk = Math.abs(entry - stop);
@@ -11,9 +11,9 @@ export function tradeR(direction, entry, stop, exit) {
 }
 
 /**
- * Składa historię: każde zagranie dostaje wynik pieniężny liczony od kapitału
- * sprzed tego zagrania (procent składany). Zagranie z ręcznie wpisanym wynikiem
- * (pnl_manual) używa tej kwoty wprost.
+ * Builds the ledger: each trade gets a money result calculated from the capital
+ * before that trade (compounding). A trade with a hand-entered result
+ * (pnl_manual) uses that amount directly.
  * trades: [{ id, instrument_id, direction, risk_pct, entry, stop_initial, exit, opened, closed, r, pnl_manual }]
  */
 export function buildLedger(trades, startCapital) {

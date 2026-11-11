@@ -7,10 +7,10 @@ import path from 'node:path';
 import { hashPassword, verifyPassword, validUsername, validPassword } from '../server/auth.js';
 import * as totp from '../server/totp.js';
 
-test('hasła: scrypt z solą, weryfikacja, walidacja', () => {
+test('passwords: salted scrypt, verification, validation', () => {
   const h = hashPassword('correct horse');
   assert.match(h, /^scrypt\$[0-9a-f]{32}\$[0-9a-f]{128}$/);
-  assert.notEqual(h, hashPassword('correct horse'));              // inna sól za każdym razem
+  assert.notEqual(h, hashPassword('correct horse'));              // a different salt every time
   assert.equal(verifyPassword('correct horse', h), true);
   assert.equal(verifyPassword('wrong', h), false);
   assert.equal(verifyPassword('x', 'garbage'), false);
@@ -18,7 +18,7 @@ test('hasła: scrypt z solą, weryfikacja, walidacja', () => {
   assert.equal(validPassword('1234567'), false); assert.equal(validPassword('12345678'), true);
 });
 
-test('TOTP: wektory RFC 6238, tolerancja okna, blokada ponownego użycia', () => {
+test('TOTP: RFC 6238 vectors, window tolerance, reuse protection', () => {
   const sec = totp.base32Encode(Buffer.from('12345678901234567890'));
   assert.equal(sec, 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
   assert.equal(totp.base32Decode(sec).toString(), '12345678901234567890');
@@ -27,17 +27,17 @@ test('TOTP: wektory RFC 6238, tolerancja okna, blokada ponownego użycia', () =>
   assert.equal(totp.codeAt(sec, Math.floor(2000000000 / 30)), '279037');    // RFC: 69279037
   const now = 1111111109000, cur = Math.floor(now / 30000);
   assert.equal(totp.verify(sec, '081804', { now }), cur);
-  assert.equal(totp.verify(sec, totp.codeAt(sec, cur - 1), { now }), cur - 1);   // poprzednie okno jeszcze ważne
-  assert.equal(totp.verify(sec, totp.codeAt(sec, cur - 2), { now }), null);      // starsze już nie
-  assert.equal(totp.verify(sec, '081804', { now, lastCounter: cur }), null);     // ten sam kod drugi raz
+  assert.equal(totp.verify(sec, totp.codeAt(sec, cur - 1), { now }), cur - 1);   // the previous window is still valid
+  assert.equal(totp.verify(sec, totp.codeAt(sec, cur - 2), { now }), null);      // older ones are not
+  assert.equal(totp.verify(sec, '081804', { now, lastCounter: cur }), null);     // the same code a second time
   assert.equal(totp.verify(sec, '000000', { now }), null); assert.equal(totp.verify(sec, 'abc', { now }), null);
   const codes = totp.newRecoveryCodes();
   assert.equal(codes.length, 10); assert.match(codes[0], /^[0-9a-f]{4}-[0-9a-f]{4}$/);
   assert.equal(totp.hashCode(codes[0]), totp.hashCode(codes[0].replace('-', '').toUpperCase()));
 });
 
-// Pełny przebieg na prawdziwym serwerze: pierwsze uruchomienie, logowanie, role, izolacja danych, udostępnianie, wiadomości.
-test('serwer: konfiguracja, logowanie, role, izolacja portfeli, udostępnianie, wiadomości', async (t) => {
+// Full run against a real server: first launch, sign-in, roles, data isolation, sharing, messages.
+test('server: setup, sign-in, roles, portfolio isolation, sharing, messages', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kd-auth-'));
   const port = 39000 + Math.floor(Math.random() * 900);
   const srv = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/index.js'], {
@@ -59,7 +59,7 @@ test('serwer: konfiguracja, logowanie, role, izolacja portfeli, udostępnianie, 
     return call;
   };
   const anon = client(), alice = client(), bob = client(), carol = client();
-  // konfiguracja weryfikacji dwuetapowej: pobierz sekret, potwierdź kodem; zwraca sekret i kody zapasowe
+  // two-factor setup: fetch the secret, confirm with a code; returns the secret and recovery codes
   const enrol = async (c) => {
     const b1 = await c('POST', '/auth/2fa/begin', {});
     assert.equal(b1.status, 200); assert.match(b1.body.qr, /<svg/); assert.match(b1.body.url, /^otpauth:\/\/totp\//);
@@ -69,39 +69,39 @@ test('serwer: konfiguracja, logowanie, role, izolacja portfeli, udostępnianie, 
     return { secret: b1.body.secret, recovery: e.body.recovery };
   };
 
-  // przed konfiguracją: API zamknięte, stan mówi „setup”
+  // before setup: the API is closed and the state says "setup"
   assert.equal((await anon('GET', '/auth/state')).body.setup, true);
   assert.equal((await anon('GET', '/dashboard')).status, 401);
   assert.equal((await anon('GET', '/positions')).status, 401);
   assert.equal((await anon('POST', '/auth/setup', { username: 'alice', password: 'short' })).status, 400);
 
-  // pierwsze konto = administrator; drugi raz konfiguracja jest zamknięta
+  // the first account is the administrator; setup is closed afterwards
   const setup = await alice('POST', '/auth/setup', { username: 'alice', password: 'alice-password', email: 'alice@example.com' });
   assert.equal(setup.status, 201); assert.equal(setup.body.user.role, 'admin');
   assert.match(setup.setCookie, /HttpOnly/); assert.match(setup.setCookie, /SameSite=Lax/);
   assert.equal((await anon('POST', '/auth/setup', { username: 'mallory', password: 'mallory-pass' })).status, 409);
   assert.equal((await anon('GET', '/auth/state')).body.setup, false);
   assert.equal((await alice('GET', '/auth/state')).body.user.username, 'alice');
-  // nowe konto musi najpierw włączyć 2FA – do tego czasu API jest zamknięte
+  // a new account must enable 2FA first – until then the API is closed
   assert.equal((await alice('GET', '/dashboard')).status, 403);
   assert.equal((await alice('GET', '/dashboard')).body.error, 'err.twofaRequired');
   const aliceTotp = await enrol(alice);
   assert.equal((await alice('GET', '/dashboard')).status, 200);
-  assert.equal((await alice('POST', '/auth/2fa/disable', { password: 'alice-password' })).status, 400); // obowiązkowej nie da się wyłączyć
+  assert.equal((await alice('POST', '/auth/2fa/disable', { password: 'alice-password' })).status, 400); // a mandatory second factor cannot be turned off
 
-  // złe hasło, nieistniejący login, potem poprawne logowanie
+  // wrong password, unknown username, then a correct sign-in
   assert.equal((await anon('POST', '/auth/login', { username: 'alice', password: 'nope-nope' })).status, 401);
   assert.equal((await anon('POST', '/auth/login', { username: 'ghost', password: 'whatever1' })).status, 401);
 
-  // administrator zakłada konta
+  // the administrator creates accounts
   assert.equal((await alice('POST', '/users', { username: 'bob', password: 'bob-password', role: 'user' })).status, 201);
   assert.equal((await alice('POST', '/users', { username: 'carol', password: 'carol-password', role: 'admin' })).status, 201);
-  assert.equal((await alice('POST', '/users', { username: 'BOB', password: 'bob-password' })).status, 400); // login bez rozróżniania wielkości liter
+  assert.equal((await alice('POST', '/users', { username: 'BOB', password: 'bob-password' })).status, 400); // usernames are case-insensitive
   assert.equal((await bob('POST', '/auth/login', { username: 'bob', password: 'bob-password' })).status, 200);
   assert.equal((await carol('POST', '/auth/login', { username: 'Carol', password: 'carol-password' })).status, 200);
   const bobTotp = await enrol(bob); await enrol(carol);
 
-  // logowanie z 2FA: samo hasło nie wystarcza; zły kod odrzucony; kod zapasowy działa raz; zapamiętane urządzenie pomija kod
+  // sign-in with 2FA: the password alone is not enough; a wrong code is rejected; a recovery code works once; a remembered device skips the code
   const dev = client();
   const step1 = await dev('POST', '/auth/login', { username: 'alice', password: 'alice-password' });
   assert.equal(step1.body.twofa, true); assert.equal(step1.setCookie, null);
@@ -110,7 +110,7 @@ test('serwer: konfiguracja, logowanie, role, izolacja portfeli, udostępnianie, 
   const rec = aliceTotp.recovery[0];
   assert.equal((await dev('POST', '/auth/login', { username: 'alice', password: 'alice-password', code: rec })).status, 200);
   await dev('POST', '/auth/logout');
-  assert.equal((await dev('POST', '/auth/login', { username: 'alice', password: 'alice-password', code: rec })).status, 401); // zużyty
+  assert.equal((await dev('POST', '/auth/login', { username: 'alice', password: 'alice-password', code: rec })).status, 401); // already used
   const dev2 = client();
   let cookies = [];
   const raw = await fetch(base + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'alice', password: 'alice-password', code: aliceTotp.recovery[1], remember: true }) });
@@ -118,22 +118,22 @@ test('serwer: konfiguracja, logowanie, role, izolacja portfeli, udostępnianie, 
   assert.equal(raw.status, 200); assert.ok(cookies.some((x) => x.startsWith('kd_device=')));
   const deviceCookie = cookies.find((x) => x.startsWith('kd_device='));
   const again = await fetch(base + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: deviceCookie }, body: JSON.stringify({ username: 'alice', password: 'alice-password' }) });
-  assert.equal(again.status, 200); assert.equal((await again.json()).user.username, 'alice');           // bez kodu na zapamiętanym urządzeniu
+  assert.equal(again.status, 200); assert.equal((await again.json()).user.username, 'alice');           // no code on a remembered device
   const other = await fetch(base + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: deviceCookie }, body: JSON.stringify({ username: 'bob', password: 'bob-password' }) });
-  assert.equal((await other.json()).twofa, true);                                                       // ciasteczko alice nie działa dla boba
+  assert.equal((await other.json()).twofa, true);                                                       // alice's cookie does not work for bob
   void dev2; void bobTotp;
 
-  // zwykły użytkownik nie zmienia ustawień serwera ani kont, ale swoje ustawienia tak
+  // a regular user cannot change server settings or accounts, but can change their own settings
   assert.equal((await bob('POST', '/users', { username: 'eve', password: 'eve-password' })).status, 403);
   assert.equal((await bob('PUT', '/settings', { smtp: { host: 'evil' } })).status, 403);
   assert.equal((await bob('POST', '/categories/toggle', { category: 'fx', enabled: false })).status, 403);
   assert.equal((await bob('PUT', '/settings', { capital: { start: 5000, currency: 'EUR' } })).status, 200);
   assert.equal((await bob('GET', '/settings')).body.settings.capital.start, 5000);
-  assert.equal((await alice('GET', '/settings')).body.settings.capital.start, 0);   // kapitał jest osobisty
-  assert.equal((await bob('GET', '/settings')).body.settings.smtp.host, '');         // dane serwera ukryte
+  assert.equal((await alice('GET', '/settings')).body.settings.capital.start, 0);   // capital is personal
+  assert.equal((await bob('GET', '/settings')).body.settings.smtp.host, '');         // server data is hidden
   assert.equal((await bob('GET', '/users')).body[0].email, undefined);
 
-  // pozycje są prywatne
+  // positions are private
   const pos = await alice('POST', '/positions', { instrument_id: 'EURUSD', direction: 'LONG', risk_pct: 1, entry: 1.1, stop: 1.09 });
   assert.equal(pos.status, 201);
   assert.equal((await alice('GET', '/positions')).body.length, 1);
@@ -146,77 +146,77 @@ test('serwer: konfiguracja, logowanie, role, izolacja portfeli, udostępnianie, 
   assert.equal((await bob('GET', '/capital')).body.trades.length, 0);
   assert.equal((await alice('GET', '/capital')).body.trades.length, 1);
 
-  // udostępnianie całego portfela
+  // sharing a whole portfolio
   assert.equal((await bob('GET', '/portfolio/1')).status, 403);
   assert.deepEqual((await alice('PUT', '/shares', { viewers: [2, 999, 1] })).body.viewers, [2]);
   const shared = await bob('GET', '/portfolio/1');
   assert.equal(shared.status, 200); assert.equal(shared.body.owner.username, 'alice'); assert.equal(shared.body.trades.length, 1);
   assert.deepEqual((await bob('GET', '/shares')).body.sharedWithMe, [{ id: 1, username: 'alice' }]);
-  assert.equal((await carol('GET', '/portfolio/1')).status, 403);                    // carol nie dostała dostępu
+  assert.equal((await carol('GET', '/portfolio/1')).status, 403);                    // carol was not given access
   await alice('PUT', '/shares', { viewers: [] });
   assert.equal((await bob('GET', '/portfolio/1')).status, 403);
 
-  // wiadomości i udostępnienie pojedynczego zagrania
+  // messages and sharing a single trade
   assert.equal((await alice('POST', '/messages', { to: 2, body: '' })).status, 400);
-  assert.equal((await alice('POST', '/messages', { to: 1, body: 'do siebie' })).status, 400);
-  assert.equal((await bob('POST', '/messages', { to: 1, body: 'x', trade_id: closed.body.tradeId })).status, 400); // cudze zagranie
-  assert.equal((await alice('POST', '/messages', { to: 2, body: 'Zobacz to zagranie', trade_id: closed.body.tradeId })).status, 201);
+  assert.equal((await alice('POST', '/messages', { to: 1, body: 'to myself' })).status, 400);
+  assert.equal((await bob('POST', '/messages', { to: 1, body: 'x', trade_id: closed.body.tradeId })).status, 400); // someone else's trade
+  assert.equal((await alice('POST', '/messages', { to: 2, body: 'Look at this trade', trade_id: closed.body.tradeId })).status, 201);
   assert.equal((await bob('GET', '/status')).body.mail.unread, 1);
   assert.equal((await carol('GET', '/status')).body.mail.unread, 0);
   const th = await bob('GET', '/messages/1');
   assert.equal(th.body.messages.length, 1); assert.equal(th.body.messages[0].trade.instrument_id, 'EURUSD'); assert.equal(th.body.messages[0].trade.r, closed.body.r);
-  assert.equal((await bob('GET', '/status')).body.mail.unread, 0);                   // otwarcie wątku oznacza jako przeczytane
-  assert.equal((await carol('GET', '/messages/1')).body.messages.length, 0);        // osoba trzecia nie widzi rozmowy
-  assert.equal((await bob('POST', '/messages', { to: 1, body: 'Dzięki!' })).status, 201);
+  assert.equal((await bob('GET', '/status')).body.mail.unread, 0);                   // opening the thread marks it read
+  assert.equal((await carol('GET', '/messages/1')).body.messages.length, 0);        // a third person cannot see the conversation
+  assert.equal((await bob('POST', '/messages', { to: 1, body: 'Thanks!' })).status, 201);
   assert.equal((await alice('GET', '/messages')).body.threads[0].unread, 1);
 
-  // czat grupowy: grupy zakłada administrator, czytają i piszą tylko członkowie
+  // group chat: groups are created by an administrator; only members read and write
   assert.equal((await bob('POST', '/rooms', { name: 'x', members: [2] })).status, 403);
   const room = await alice('POST', '/rooms', { name: 'Ichimoku team', members: [1, 2] });
   assert.equal(room.status, 201);
-  assert.equal((await bob('POST', `/rooms/${room.body.id}/messages`, { body: 'Cześć grupo' })).status, 201);
+  assert.equal((await bob('POST', `/rooms/${room.body.id}/messages`, { body: 'Hello group' })).status, 201);
   assert.equal((await carol('GET', `/rooms/${room.body.id}/messages`)).status, 403);
-  assert.equal((await carol('POST', `/rooms/${room.body.id}/messages`, { body: 'wchodzę' })).status, 403);
-  assert.equal((await alice('GET', '/status')).body.mail.unread, 2);                 // 1 prywatna + 1 w grupie
+  assert.equal((await carol('POST', `/rooms/${room.body.id}/messages`, { body: 'let me in' })).status, 403);
+  assert.equal((await alice('GET', '/status')).body.mail.unread, 2);                 // 1 direct + 1 in the group
   const rt = await alice('GET', `/rooms/${room.body.id}/messages`);
   assert.equal(rt.body.messages[0].from, 'bob'); assert.equal(rt.body.room.members.length, 2);
   assert.equal((await alice('GET', '/status')).body.mail.unread, 1);
   assert.equal((await bob('GET', '/messages')).body.rooms.length, 1);
   assert.equal((await carol('GET', '/messages')).body.rooms.filter((r) => r.member).length, 0);
 
-  // załączniki: obraz rozpoznany po treści, inne pliki tylko do pobrania, dostęp wyłącznie dla uczestników
+  // attachments: images detected by content, other files download-only, access for participants only
   const up = async (c, bytes, name) => { const st = await c('GET', '/auth/state'); void st; return c; };
   void up;
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
   const rawUpload = async (cookieClient, body, name) => {
-    // klient testowy wysyła JSON, więc plik wgrywamy bezpośrednio z ciasteczkiem sesji
+    // the test client sends JSON, so the file is uploaded directly with the session cookie
     const probe = await cookieClient('GET', '/auth/state'); void probe;
     return fetch(base + '/files', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(name), Cookie: cookieClient.cookie() }, body });
   };
-  const f1 = await rawUpload(bob, png, 'wykres ąę.png'); const f1b = await f1.json();
-  assert.equal(f1.status, 201); assert.equal(f1b.type, 'image/png'); assert.equal(f1b.image, true); assert.equal(f1b.name, 'wykres ąę.png');
+  const f1 = await rawUpload(bob, png, 'chart äö.png'); const f1b = await f1.json();
+  assert.equal(f1.status, 201); assert.equal(f1b.type, 'image/png'); assert.equal(f1b.image, true); assert.equal(f1b.name, 'chart äö.png');
   const f2 = await (await rawUpload(bob, Buffer.from('<script>alert(1)</script>'), 'evil.html')).json();
   assert.equal(f2.type, 'application/octet-stream'); assert.equal(f2.image, false);
   assert.equal((await rawUpload(bob, Buffer.alloc(5 * 1024 * 1024 + 10), 'big.bin')).status, 413);
-  assert.equal((await alice('POST', '/messages', { to: 2, file_id: f1b.id })).status, 400);              // cudzy plik
+  assert.equal((await alice('POST', '/messages', { to: 2, file_id: f1b.id })).status, 400);              // someone else's file
   assert.equal((await bob('POST', '/messages', { to: 1, file_id: f1b.id })).status, 201);
-  assert.equal((await bob('POST', `/rooms/${room.body.id}/messages`, { body: 'plik', file_id: f2.id })).status, 201);
+  assert.equal((await bob('POST', `/rooms/${room.body.id}/messages`, { body: 'a file', file_id: f2.id })).status, 201);
   const getFile = (c, id) => fetch(base + '/files/' + id, { headers: { Cookie: c.cookie() } });
   const g1 = await getFile(alice, f1b.id);
   assert.equal(g1.status, 200); assert.equal(g1.headers.get('content-type'), 'image/png'); assert.match(g1.headers.get('content-disposition'), /^inline/);
   assert.equal(Buffer.from(await g1.arrayBuffer()).equals(png), true);
   const g2 = await getFile(alice, f2.id);
   assert.match(g2.headers.get('content-disposition'), /^attachment/); assert.equal(g2.headers.get('x-content-type-options'), 'nosniff');
-  assert.equal((await getFile(carol, f1b.id)).status, 404);                                               // osoba spoza rozmowy
-  assert.equal((await getFile(carol, f2.id)).status, 404);                                                // i spoza grupy
+  assert.equal((await getFile(carol, f1b.id)).status, 404);                                               // a person outside the conversation
+  assert.equal((await getFile(carol, f2.id)).status, 404);                                                // and outside the group
   assert.equal((await fetch(base + '/files/' + f1b.id)).status, 401);
 
-  // push: klucz publiczny i subskrypcja (sama wysyłka wymaga usługi push przeglądarki)
+  // push: public key and subscription (actual delivery needs the browser's push service)
   assert.match((await bob('GET', '/push/key')).body.key, /^[A-Za-z0-9_-]{80,}$/);
   assert.equal((await bob('POST', '/push/subscribe', { subscription: { endpoint: 'http://insecure', keys: { p256dh: 'a', auth: 'b' } } })).status, 400);
   assert.equal((await bob('POST', '/push/test')).status, 400);
 
-  // logi: użytkownik widzi tylko swoje wpisy, administrator wszystkie
+  // logs: a user sees only their own entries, an administrator sees all
   const bobLogs = (await bob('GET', '/logs')).body.rows;
   assert.ok(bobLogs.length > 0); assert.ok(bobLogs.every((r) => r.user === 'bob')); assert.ok(bobLogs.some((r) => r.code === 'auth.login'));
   assert.equal(bobLogs[0].ip, undefined);
@@ -225,18 +225,18 @@ test('serwer: konfiguracja, logowanie, role, izolacja portfeli, udostępnianie, 
   assert.ok(allLogs.some((r) => r.code === 'trade.close')); assert.ok(allLogs.some((r) => r.code === 'auth.loginFailed'));
   assert.ok((await alice('GET', '/logs?category=trade')).body.rows.every((r) => r.category === 'trade'));
   assert.ok((await alice('GET', '/logs?user=2')).body.rows.every((r) => r.user === 'bob'));
-  assert.ok((await bob('GET', '/logs?user=1')).body.rows.every((r) => r.user === 'bob')); // filtr użytkownika nie działa dla zwykłego konta
+  assert.ok((await bob('GET', '/logs?user=1')).body.rows.every((r) => r.user === 'bob')); // the user filter has no effect for a regular account
 
-  // konto: zmiana hasła wymaga obecnego; ostatniego administratora nie da się usunąć ani zdegradować
+  // account: changing the password needs the current one; the last administrator cannot be deleted or demoted
   assert.equal((await bob('PUT', '/account', { current: 'wrong-one', password: 'new-password-1' })).status, 400);
   assert.equal((await bob('PUT', '/account', { current: 'bob-password', password: 'new-password-1' })).status, 200);
   assert.equal((await anon('POST', '/auth/login', { username: 'bob', password: 'bob-password' })).status, 401);
-  assert.equal((await alice('DELETE', '/users/1')).status, 400);                     // samego siebie
+  assert.equal((await alice('DELETE', '/users/1')).status, 400);                     // oneself
   assert.equal((await alice('DELETE', '/users/3')).status, 200);                     // carol
-  assert.equal((await alice('PUT', '/users/1', { role: 'user' })).status, 400);      // ostatni administrator
-  assert.equal((await carol('GET', '/dashboard')).status, 401);                      // sesja usuniętego konta nie działa
+  assert.equal((await alice('PUT', '/users/1', { role: 'user' })).status, 400);      // the last administrator
+  assert.equal((await carol('GET', '/dashboard')).status, 401);                      // a deleted account's session no longer works
 
-  // wylogowanie
+  // sign-out
   assert.equal((await alice('POST', '/auth/logout')).status, 200);
   assert.equal((await alice('GET', '/dashboard')).status, 401);
 });

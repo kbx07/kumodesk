@@ -1,4 +1,4 @@
-// Powiadomienia e-mail (SMTP) – raport po zamknięciu grupy i alerty.
+// E-mail notifications (SMTP) – report after a group's close, and alerts.
 import nodemailer from 'nodemailer';
 import { t, fmtPrice, resolveLang } from '../public/i18n.js';
 
@@ -14,7 +14,7 @@ function transport(smtp) {
     secure: sec === 'tls',
     requireTLS: sec === 'starttls',
     ignoreTLS: sec === 'none',
-    // Google: OAuth2 (XOAUTH2) z tokenem odświeżania albo zwykłe hasło / hasło aplikacji
+    // Google: OAuth2 (XOAUTH2) with a refresh token, or a plain password / app password
     auth: smtp.auth === 'oauth2' && smtp.oauthRefreshToken
       ? { type: 'OAuth2', user: smtp.user, clientId: smtp.oauthClientId, clientSecret: smtp.oauthClientSecret, refreshToken: smtp.oauthRefreshToken }
       : smtp.user ? { user: smtp.user, pass: smtp.pass } : undefined,
@@ -22,7 +22,7 @@ function transport(smtp) {
   });
 }
 
-/** Czy da się wysłać cokolwiek (serwer i nadawca); odbiorcę można podać osobno. */
+/** Whether anything can be sent (server and sender); the recipient can be passed separately. */
 export function smtpReady(s) {
   return !!(s.smtp.host && (s.smtp.from || s.smtp.user));
 }

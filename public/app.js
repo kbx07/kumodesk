@@ -1,19 +1,19 @@
-// KumoDesk – interfejs (bez etapu budowania; czyste moduły ES).
+// KumoDesk – user interface (no build step; plain ES modules).
 import { t, has, fmtPrice, detectLang, resolveLang } from './i18n.js';
 import { drawIchimoku } from './chart.js';
 import { HELP } from './help.js';
 
-// ---------- język ----------
-const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* brak */ } } };
+// ---------- language ----------
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* unavailable */ } } };
 let langPref = store.get('kd.lang') || 'auto';
 let lang = langPref === 'auto' ? detectLang(navigator.languages || [navigator.language]) : resolveLang(langPref);
 const T = (k, p) => t(lang, k, p);
-const TE = (msg) => (has(msg) ? T(msg) : msg); // tłumaczy kody błędów z serwera
+const TE = (msg) => (has(msg) ? T(msg) : msg); // translates error codes from the server
 
-// ---------- tryb widoku: pro (pełny, domyślny) albo basic (uproszczony) ----------
+// ---------- view mode: pro (full, default) or basic (simplified) ----------
 let uiMode = store.get('kd.mode') === 'basic' ? 'basic' : 'pro';
 
-// ---------- pomocnicze ----------
+// ---------- helpers ----------
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -40,14 +40,14 @@ async function api(path, opts = {}) {
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
-let me = null;            // zalogowany użytkownik
+let me = null;            // signed-in user
 let lookCfg = { theme: 'normal', loginBg: 'aurora', appBg: 'default', custom: {} };
-// Postaci boczne motywów: proste sylwetki w stylu wycinanki (ubrane, bez szczegółów).
+// Theme side figures: simple paper-cut style silhouettes (clothed, no detail).
 const FIG = {
   anime: '<svg viewBox="0 0 200 420" xmlns="http://www.w3.org/2000/svg"><g fill="currentColor"><path d="M62 70c-16 30-22 78-10 120l14-4c-6-34-4-70 6-98zM138 70c16 30 22 78 10 120l-14-4c6-34 4-70-6-98z" opacity=".75"/><circle cx="100" cy="62" r="34"/><path d="M66 58c2-30 22-44 36-44s34 12 34 44c-10-16-22-22-36-22s-26 8-34 22z" opacity=".55"/><path d="M78 100h44l14 96H64z"/><path d="M58 196h84l22 84H36z" opacity=".85"/><path d="M74 280h20l-4 118H78zM106 280h20l-4 118h-12z"/><path d="M70 398h26v12H66zM104 398h26l4 12h-30z"/><path d="M124 112l34 46-10 8-30-36zM76 112l-30 52 10 6 26-40z" opacity=".9"/></g><path d="M150 150l22-30 6 4-20 32z" fill="currentColor" opacity=".6"/></svg>',
   cosplay: '<svg viewBox="0 0 200 420" xmlns="http://www.w3.org/2000/svg"><g fill="currentColor"><path d="M70 36l-6-30 28 18zM130 36l6-30-28 18z"/><circle cx="100" cy="62" r="32"/><path d="M68 64c0-22 14-40 32-40s32 18 32 40c-8-10-20-16-32-16s-24 6-32 16z" opacity=".55"/><path d="M60 100h80l40 190c-26 10-54-6-80-6s-54 16-80 6z" opacity=".45"/><path d="M78 100h44l10 100H68z"/><path d="M68 200h64l10 70H58z" opacity=".9"/><path d="M76 270h18l-2 126H80zM106 270h18l-4 126h-12z"/><path d="M68 396h28v14H64zM104 396h28l4 14h-32z"/><path d="M124 112l40-34 6 8-34 44z" opacity=".9"/></g><path d="M166 30l6 190h-6z" fill="currentColor"/><path d="M169 6l12 20-12 14-12-14z" fill="currentColor" opacity=".8"/></svg>',
 };
-/** Ustawia motyw, tło i dekoracje (spadające płatki, iskry, napisy mangi, postaci boczne). */
+/** Applies the theme, background and decorations (falling petals, sparks, manga lettering, side figures). */
 function applyLook() {
   const th = lookCfg.theme || 'normal';
   document.body.dataset.theme = th; document.body.dataset.bg = th === 'normal' ? lookCfg.appBg : 'theme';
@@ -158,7 +158,7 @@ function divergingRow(label, v, max, title) {
     h('span', { class: 'num right' }, signed(v)));
 }
 
-// ---------- okna dialogowe ----------
+// ---------- dialogs ----------
 function openDialog(title, form, onSave, { hint, saveLabel, cls } = {}) {
   const dlg = h('dialog', { class: cls || '' }, h('h2', null, title), form, hint ? h('p', { class: 'hint' }, hint) : null);
   const errEl = h('span', { class: 'err small' });
@@ -176,7 +176,7 @@ function openDialog(title, form, onSave, { hint, saveLabel, cls } = {}) {
 let capitalCfg = { start: 0, currency: 'EUR', defaultRisk: 1 };
 const money = (v, d = 2) => (v == null ? '–' : `${Number(v).toLocaleString(lang, { minimumFractionDigits: d, maximumFractionDigits: d })} ${capitalCfg.currency}`);
 
-/** „Zlecenie” w stylu brokera – ale tylko wpis na listę otwartych pozycji. */
+/** A broker-style "order" ticket – but it only adds an entry to the list of open positions. */
 function positionTicket(inst, a) {
   let dir = a?.dir === 'SHORT' ? 'SHORT' : 'LONG', price = a?.close ?? null, stopTouched = false, live = false;
   const L = a?.levels;
@@ -229,7 +229,7 @@ function positionTicket(inst, a) {
 }
 let currentEquity = null;
 
-/** Zamknięcie pozycji: zapis wyniku do historii zagrań. */
+/** Closing a position: stores the result in the trade history. */
 function closeDialog(p) {
   const stop0 = p.stop_initial ?? p.stop;
   const canR = p.entry != null && stop0 != null && stop0 !== p.entry;
@@ -262,7 +262,7 @@ function closeDialog(p) {
   api(`/quote/${encodeURIComponent(p.instrument_id)}`).then((q) => { if (exit.value === '') { exit.value = fmtPrice(q.price); update(); } }).catch(() => {});
 }
 
-// ---------- wykresy kapitału (SVG) ----------
+// ---------- capital charts (SVG) ----------
 function equityChart(curve, start) {
   const W = 640, H = 220, pad = { l: 8, r: 70, t: 12, b: 22 };
   const ys = curve.map((p) => p.equity);
@@ -299,7 +299,7 @@ function tradeBars(trades) {
   </svg>`;
 }
 
-// ---------- stan globalny ----------
+// ---------- global state ----------
 let market = null, status = null, route = '', pollTimer = null, wasRunning = false;
 
 const TONE = {
@@ -319,7 +319,7 @@ function tile(key, value, sub, tone, pct, extra) {
     pct != null ? h('div', { class: 'meter' }, h('i', { style: `width:${Math.max(3, Math.min(100, pct))}%` })) : null);
 }
 
-// ---------- WIDOK BASIC ----------
+// ---------- BASIC VIEW ----------
 function basicPicks(m) {
   const byId = Object.fromEntries(m.instruments.map((a) => [a.id, a]));
   return m.ranking.map((id) => byId[id]).filter((a) => a.action === 'PLAY' && !a.correlated && !a.inPortfolio).slice(0, 3);
@@ -384,7 +384,7 @@ function viewDashboard() {
   root.append(funnelCard(m));
   if (m.portfolio.positions.length) root.append(positionsCard(m.portfolio.positions, true));
 
-  // --- główny cel ---
+  // --- primary target ---
   const p = m.primary ? byId[m.primary] : null;
   const primaryCard = h('div', { class: 'card' }, h('h3', null, T('panel.primary')));
   if (!p) primaryCard.append(h('p', { class: 'muted' }, T('primary.none')));
@@ -400,7 +400,7 @@ function viewDashboard() {
       p.concentration ? h('p', { class: 'hint' }, '⚠ ' + T('concentration', { cur: p.concentration })) : '');
   }
 
-  // --- top setupy ---
+  // --- top setups ---
   const top = m.ranking.map((id) => byId[id]).filter((a) => a.grade !== 'D').slice(0, 8);
   const topCard = h('div', { class: 'card' }, h('h3', null, T('panel.top'), h('span', { class: 'muted small' }, T('panel.top.legend'))));
   if (!top.length) topCard.append(h('p', { class: 'muted' }, T('top.none')));
@@ -411,7 +411,7 @@ function viewDashboard() {
       h('td', null, T('action.' + a.action)), h('td', { class: 'num' }, a.op),
       h('td', null, T('sym.' + a.sym)), h('td', null, gradeBox(a.grade))))))));
 
-  // --- zagrożenia ---
+  // --- threats ---
   const threats = [...m.portfolio.threats];
   if (m.tf.state === 'CONFLICT') threats.push({ code: 'threat.tfConflict', level: 'MED', params: { n: m.tf.conflict } });
   if (c.mood === 'DIVERGENT') threats.push({ code: 'threat.divergent', level: 'MED', params: {} });
@@ -422,7 +422,7 @@ function viewDashboard() {
 
   root.append(h('div', { class: 'grid row-main' }, primaryCard, topCard, threatCard));
 
-  // --- kontekst ---
+  // --- context ---
   const strengthCard = h('div', { class: 'card' }, h('h3', null, T('panel.strength'), h('span', { class: 'muted small' }, '−10 … +10')));
   if (!m.strength.length) strengthCard.append(h('p', { class: 'muted' }, T('strength.none')));
   else strengthCard.append(h('div', { class: 'bars' }, m.strength.map((s) => divergingRow(s.currency, s.value, 10, T('strength.tip', { n: s.pairs })))));
@@ -494,7 +494,7 @@ function allTable(m) {
   return card;
 }
 
-// ---------- SZCZEGÓŁY INSTRUMENTU ----------
+// ---------- INSTRUMENT DETAILS ----------
 async function viewInstrument(id, tf, view) {
   const root = h('div', null, h('div', { class: 'muted' }, T('loading')));
   let d;
@@ -563,7 +563,7 @@ async function viewInstrument(id, tf, view) {
     a.concentration ? h('p', { class: 'hint' }, '⚠ ' + T('concentration', { cur: a.concentration })) : null,
     a.correlated ? h('p', { class: 'hint' }, '≈ ' + T('correlated', a.correlated)) : null);
 
-  // historia wyniku D1
+  // D1 score history
   const hist = a.history, hw = 100 / hist.length;
   const histCard = h('div', { class: 'card' }, h('h3', null, T('detail.history'), h('span', { class: 'muted small' }, T('held.n', { n: a.held }))));
   const svg = `<svg viewBox="0 0 100 44" preserveAspectRatio="none" style="width:100%;height:120px;display:block">
@@ -584,7 +584,7 @@ async function viewInstrument(id, tf, view) {
   return root;
 }
 
-// ---------- PORTFEL ----------
+// ---------- PORTFOLIO ----------
 async function viewPortfolio() {
   const root = h('div');
   if (!market) return h('div', { class: 'muted' }, T('loading'));
@@ -626,7 +626,7 @@ async function viewPortfolio() {
   if (!pf.threats.length) thr.append(h('p', { class: 'muted' }, T('threats.none')));
   pf.threats.forEach((x) => thr.append(h('div', { class: 'threat' }, h('span', { class: `lv ${x.level}` }, T('level.' + x.level)), h('span', null, T(x.code, x.params)))));
 
-  try { root.append(await shareBox()); } catch { /* sekcja udostępniania jest opcjonalna */ }
+  try { root.append(await shareBox()); } catch { /* the sharing section is optional */ }
   const accuracy = h('div'); api('/signals').then((d) => accuracy.replaceWith(accuracyCard(d))).catch(() => {});
   if (pf.positions.length) root.append(positionsCard(pf.positions, false));
   root.append(h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h3', null, T('pf.positions'),
@@ -637,7 +637,7 @@ async function viewPortfolio() {
   return root;
 }
 
-/** Skuteczność algorytmu: w ilu przypadkach „zielone światło” skończyło się zyskiem. */
+/** Algorithm accuracy: how often a "green light" ended in profit. */
 function accuracyCard(d) {
   const st = d.stats, a = st.all;
   const card = h('div', { class: 'card' }, h('h3', null, T('acc2.title'), h('span', { class: 'muted small' }, d.busy ? T('acc2.busy') : st.from ? T('acc2.period', { from: st.from, to: d.through || '–' }) : '')));
@@ -663,7 +663,7 @@ function accuracyCard(d) {
 }
 const round1 = (v) => Math.round(v * 10) / 10;
 
-// ---------- HISTORIA ----------
+// ---------- HISTORY ----------
 async function viewHistory() {
   const root = h('div', null, h('div', { class: 'muted' }, T('loading')));
   const [hist, alerts] = await Promise.all([api('/history'), api('/alerts')]);
@@ -682,9 +682,9 @@ async function viewHistory() {
   return root;
 }
 
-// ---------- USTAWIENIA ----------
+// ---------- SETTINGS ----------
 let settingsTab = 'general';
-/** Powiadomienia push na tym urządzeniu (domyślnie wyłączone; włączenie pyta przeglądarkę o zgodę). */
+/** Push notifications on this device (off by default; enabling asks the browser for permission). */
 const pushSupported = () => window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 const b64ToBytes = (s) => Uint8Array.from(atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
 function pushCard() {
@@ -716,7 +716,7 @@ function pushCard() {
   card.append(h('label', { class: 'inline-check' }, toggle, h('b', null, T('push.toggle'))), h('p', { class: 'hint' }, T('push.hint')), h('div', { class: 'actions', style: 'margin-top:8px' }, testBtn));
   return card;
 }
-/** Sekcja 2FA w „Moje konto”. */
+/** The 2FA section in "My account". */
 function twofaCard() {
   const tf = me.twofa || {};
   const card = h('div', { class: 'card section-gap' }, h('h3', null, T('twofa.title'), h('span', { class: 'badge' }, h('span', { class: `dot ${tf.enabled ? 'good' : 'warn'}` }), T(tf.enabled ? 'twofa.on' : 'twofa.off'))));
@@ -751,7 +751,7 @@ async function viewSettings() {
         isAdmin() ? field(T('set.mailLang'), h('select', { name: 'mail' }, ['pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === (s.notify.lang || lang) }, T('lang.' + l))))) : null,
         h('div', null, h('button', { class: 'btn primary' }, T('save'))));
       f.onsubmit = async (e) => { e.preventDefault(); const d = formData(f); if (isAdmin()) await save({ notify: { lang: d.mail } }); setLang(d.ui); };
-      // konto: e-mail i zmiana hasła
+      // account: e-mail and password change
       const acc = h('form', { class: 'form' },
         field(T('auth.username'), h('input', { type: 'text', value: me.username, disabled: true })),
         field(T('acc.email'), h('input', { type: 'email', name: 'email', value: me.email || '', autocomplete: 'email' }), T('acc.email.hint')),
@@ -763,7 +763,7 @@ async function viewSettings() {
         try { const r = await api('/account', { method: 'PUT', body: { email: d.email, ...(d.password ? { current: d.current, password: d.password } : {}) } }); me = r.user; toast(T('saved')); render(); }
         catch (ex) { toast(TE(ex.message), true); }
       };
-      // wygląd: motyw, tła i obrazki własnego motywu (dla wszystkich)
+      // appearance: theme, backgrounds and custom-theme images (for everyone)
       let look = null;
       if (isAdmin()) {
         const ap = s.appearance;
@@ -1111,10 +1111,10 @@ async function viewSettings() {
   return root;
 }
 
-// ---------- JAK UŻYWAĆ ----------
+// ---------- HOW TO USE ----------
 function viewHelp() {
   const sections = HELP[lang] || HELP.en;
-  // **pogrubienie** -> <b>; tekst pochodzi wyłącznie z pliku help.js
+  // **bold** -> <b>; the text comes only from help.js
   const rich = (text) => { const el = h('span'); text.split(/\*\*(.+?)\*\*/g).forEach((part, i) => el.append(i % 2 ? h('b', null, part) : part)); return el; };
   const root = h('div', { class: 'help' });
   root.append(h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h3', null, T('help.title')),
@@ -1125,7 +1125,7 @@ function viewHelp() {
   return root;
 }
 
-// ---------- LOGOWANIE ----------
+// ---------- SIGN-IN ----------
 async function showAuth() {
   let st;
   try { st = await api('/auth/state'); } catch { st = { setup: false, user: null, appearance: lookCfg }; }
@@ -1183,7 +1183,7 @@ async function showAuth() {
   return false;
 }
 const needEnrol = () => !!me && me.twofa?.required && !me.twofa?.enabled;
-/** Formularz włączania 2FA: kod QR, sekret, potwierdzenie kodem, kody zapasowe. Zwraca węzeł; onDone po zakończeniu. */
+/** 2FA enrolment form: QR code, secret, confirmation code, recovery codes. Returns a node; calls onDone when finished. */
 function twofaSetup({ password = null, onDone, withRemember = true }) {
   const box = h('div', { class: 'twofa' }, h('div', { class: 'muted' }, T('loading')));
   api('/auth/2fa/begin', { method: 'POST', body: password ? { password } : {} }).then((d) => {
@@ -1211,7 +1211,7 @@ function twofaSetup({ password = null, onDone, withRemember = true }) {
   }).catch((e) => box.replaceChildren(h('div', { class: 'err' }, TE(e.message))));
   return box;
 }
-/** Obowiązkowa konfiguracja 2FA zaraz po zalogowaniu na nowe konto. */
+/** Mandatory 2FA setup right after the first sign-in to a new account. */
 function showEnrol() {
   const el = $('#auth');
   el.className = `auth lbg-${(lookCfg.theme || 'normal') === 'normal' ? lookCfg.loginBg : 'theme'}`;
@@ -1221,9 +1221,9 @@ function showEnrol() {
       h('div', { class: 'authfoot' }, h('button', { class: 'btn sm', onclick: () => logout() }, T('user.logout')), h('span'))));
   el.hidden = false; document.body.classList.add('locked');
 }
-async function logout() { try { await api('/auth/logout', { method: 'POST' }); } catch { /* i tak wylogowujemy */ } me = null; market = null; status = null; location.hash = '#/'; showAuth(); }
+async function logout() { try { await api('/auth/logout', { method: 'POST' }); } catch { /* sign out anyway */ } me = null; market = null; status = null; location.hash = '#/'; showAuth(); }
 
-// ---------- UDOSTĘPNIANIE ZAGRAŃ I WIADOMOŚCI ----------
+// ---------- TRADE SHARING AND MESSAGES ----------
 let usersCache = null;
 async function otherUsers() { if (!usersCache) usersCache = await api('/users'); return usersCache.filter((u) => u.id !== me.id); }
 function tradeCard(tr) {
@@ -1247,7 +1247,7 @@ async function shareTradeDialog(tr) {
   }, { saveLabel: T('share.send'), cls: 'ticket-dlg' });
 }
 const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' kB');
-/** Załącznik w wiadomości: obraz jako miniatura z podglądem w oknie, inne pliki do pobrania. */
+/** Message attachment: an image as a thumbnail with a preview dialog, other files as downloads. */
 function fileView(f) {
   const url = `/api/files/${f.id}`;
   if (f.image) return h('button', { type: 'button', class: 'thumb', title: f.name, onclick: () => {
@@ -1257,7 +1257,7 @@ function fileView(f) {
   } }, h('img', { src: url, alt: f.name, loading: 'lazy' }));
   return h('a', { class: 'filechip', href: url, download: f.name }, h('span', { class: 'fileicon' }, '⬇'), h('span', { class: 'grow clip' }, f.name), h('span', { class: 'muted small' }, fmtSize(f.size)));
 }
-/** Wgrywa plik (do 5 MB) i zwraca jego opis. */
+/** Uploads a file (up to 5 MB) and returns its descriptor. */
 async function uploadFile(fl) {
   if (fl.size > 5 * 1024 * 1024) throw new Error('err.fileTooBig');
   const r = await fetch('/api/files', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(fl.name) }, body: fl });
@@ -1324,7 +1324,7 @@ async function viewMessages(target) {
   return root;
 }
 
-/** Portfel innego użytkownika, który go udostępnił – tylko do odczytu. */
+/** Another user's shared portfolio – read-only. */
 async function viewSharedPortfolio(ownerId) {
   const root = h('div', null, h('div', { class: 'muted' }, T('loading')));
   let d;
@@ -1332,7 +1332,7 @@ async function viewSharedPortfolio(ownerId) {
   const pf = d.portfolio, st = d.stats, cur = d.capital.currency;
   const mny = (v, dg = 0) => (v == null ? '–' : `${Number(v).toLocaleString(lang, { minimumFractionDigits: dg, maximumFractionDigits: dg })} ${cur}`);
   const stat = (k, v, sub) => h('div', { class: 'card tile tone-none' }, h('div', { class: 'k' }, T(k)), h('div', { class: 'v' }, v), h('div', { class: 's' }, sub || ''));
-  const prev = capitalCfg; capitalCfg = { ...capitalCfg, currency: cur }; // wykresy opisują walutę właściciela
+  const prev = capitalCfg; capitalCfg = { ...capitalCfg, currency: cur }; // the charts use the owner's currency
   root.replaceChildren(
     h('div', { class: 'card banner' }, h('a', { class: 'btn', href: '#/portfolio' }, '← ' + T('share.mine')), h('span', { class: 'mode' }, T('share.viewing', { name: d.owner.username })), h('span', { class: 'txt' }, T('share.readonly'))),
     pf.positions.length ? positionsCard(pf.positions, true) : h('div', { class: 'card', style: 'margin-bottom:14px' }, h('p', { class: 'muted' }, T('pf.none'))),
@@ -1350,7 +1350,7 @@ async function viewSharedPortfolio(ownerId) {
   capitalCfg = prev;
   return root;
 }
-/** Sekcja „Udostępnij” na stronie portfela. */
+/** The "Share" section on the portfolio page. */
 async function shareBox() {
   const [sh, users] = await Promise.all([api('/shares'), otherUsers()]);
   const card = h('div', { class: 'card', style: 'margin-bottom:14px' });
@@ -1365,7 +1365,7 @@ async function shareBox() {
   return card;
 }
 
-// ---------- DZWONEK ----------
+// ---------- BELL ----------
 const BELL_ICON = { ANALYSIS: '◎', NEW_SETUP: '▲', UPGRADE: '▲', SETUP_LOST: '▽', REGIME: '↻', EXEC: '↻', POSITION: '!', POSITION_H4: '!' };
 function updateBell() {
   const n = status?.bell?.unread || 0, el = $('#bellcount');
@@ -1403,7 +1403,7 @@ async function toggleBell(force) {
   } catch (e) { panel.replaceChildren(h('div', { class: 'err', style: 'padding:14px' }, TE(e.message))); }
 }
 
-// ---------- ceny na żywo dla otwartych pozycji ----------
+// ---------- live prices for open positions ----------
 let liveTimer = null;
 async function refreshLive() {
   clearTimeout(liveTimer);
@@ -1420,11 +1420,11 @@ async function refreshLive() {
       el.replaceChildren(h('span', { class: `dot ${q.live ? 'good' : ''}`, style: 'display:inline-block;margin-right:5px', title: q.live ? T('live.on', { ts: fmtTs(q.time) }) : T('live.off') }), fmtPrice(q.price),
         r != null || pct != null ? h('b', { class: 'liveres', style: `color:var(--${(r ?? pct) >= 0 ? 'good' : 'neg'})` }, r != null ? ` ${signed(r, 2)} R` : '', pct != null ? ` ${signed(pct, 2)}%` : '') : null);
     });
-  } catch { /* spróbujemy przy następnym takcie */ }
+  } catch { /* retry on the next tick */ }
   liveTimer = setTimeout(refreshLive, every * 1000);
 }
 
-// ---------- routing / pętla ----------
+// ---------- routing / loop ----------
 const NAV = [['#/', 'nav.dashboard'], ['#/portfolio', 'nav.portfolio'], ['#/history', 'nav.history'], ['#/settings', 'nav.settings'], ['#/help', 'nav.help']];
 let renderSeq = 0;
 async function render() {
@@ -1478,7 +1478,7 @@ async function poll() {
     }
     wasRunning = running;
     updateJobInfo(); updateBell();
-  } catch { /* serwer chwilowo niedostępny */ }
+  } catch { /* server temporarily unavailable */ }
   pollTimer = setTimeout(poll, wasRunning ? 1500 : 20000);
 }
 async function startRefresh(groupId) {
@@ -1510,14 +1510,14 @@ async function startApp() {
     status = st; wasRunning = st.job.running;
     capitalCfg = cfg.settings.capital;
     api('/capital').then((c) => { currentEquity = c.stats.equity; }).catch(() => {});
-    // pierwszy start: język e-maili = język przeglądarki
+    // first launch: e-mail language = browser language
     if (isAdmin() && !cfg.settings.notify.lang) api('/settings', { method: 'PUT', body: { notify: { lang } } }).catch(() => {});
   } catch (e) { if (me) toast(TE(e.message), true); }
   render();
   poll();
   if (!appStarted) {
     appStarted = true;
-    setInterval(async () => { if (me && !wasRunning && !document.hidden && !location.hash.startsWith('#/settings')) { try { await loadMarket(); if ((location.hash || '#/') === '#/') render(); } catch { /* pomiń */ } } }, 120000);
+    setInterval(async () => { if (me && !wasRunning && !document.hidden && !location.hash.startsWith('#/settings')) { try { await loadMarket(); if ((location.hash || '#/') === '#/') render(); } catch { /* skip */ } } }, 120000);
   }
 }
 (async function boot() { if (await showAuth()) startApp(); })();

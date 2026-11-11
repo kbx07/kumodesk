@@ -1,4 +1,4 @@
-// Logowanie: hasła (scrypt), sesje w ciasteczku HttpOnly, role.
+// Authentication: passwords (scrypt), sessions in an HttpOnly cookie, roles.
 import crypto from 'node:crypto';
 import * as db from './db.js';
 
@@ -39,7 +39,7 @@ function setCookie(req, res, value, maxAgeSec, name = COOKIE) {
   res.setHeader('Set-Cookie', prev ? [].concat(prev, line) : line);
 }
 
-/** „Pamiętaj to urządzenie”: osobne ciasteczko, dzięki któremu kod 2FA nie jest potrzebny przez 90 dni. */
+/** "Remember this device": a separate cookie that makes the 2FA code unnecessary for 90 days. */
 export function rememberDevice(req, res, userId) {
   const token = crypto.randomBytes(32).toString('hex');
   db.trustDevice(sha(token), userId, String(req.headers['user-agent'] || '').slice(0, 120), DEVICE_TTL);
@@ -66,7 +66,7 @@ export function currentUser(req) {
   return token ? db.sessionUser(sha(token)) : null;
 }
 
-// Hamulec na zgadywanie haseł: po 8 nieudanych próbach 5 minut przerwy (na adres i login).
+// Brake on password guessing: after 8 failed attempts, a 5-minute pause (per address and username).
 const fails = new Map();
 export function loginAllowed(key) {
   const f = fails.get(key);
@@ -80,13 +80,13 @@ export function loginFailed(key) {
 }
 export const loginOk = (key) => fails.delete(key);
 
-/** Wymaga zalogowania dla całego /api poza trasami logowania. */
+/** Requires a session for all of /api except the sign-in routes. */
 export function requireAuth(req, res, next) {
   if (req.path.startsWith('/auth/')) return next();
   const user = currentUser(req);
   if (!user) return res.status(401).json({ error: db.countUsers() === 0 ? 'err.setupNeeded' : 'err.loginNeeded' });
   req.user = user;
-  // konto z obowiązkową weryfikacją dwuetapową, która nie jest jeszcze włączona: tylko konfiguracja
+  // an account with mandatory two-factor authentication that is not enabled yet: setup only
   if (user.twofa.required && !user.twofa.enabled && req.path !== '/status') return res.status(403).json({ error: 'err.twofaRequired' });
   next();
 }
