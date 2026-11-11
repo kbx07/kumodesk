@@ -12,6 +12,7 @@ It tells you *what* is worth trading and *how* — it never places orders.
 - **Time groups**: instruments that end trading at the same time are analysed together, once a day, right after their close
 - Position ticket on the chart, trade history and a capital page with equity curve and statistics
 - E-mail reports and alerts over your own SMTP server
+- Sign-in with multiple accounts, portfolio and trade sharing, and messages between users
 - Interface and e-mails in Polish, German and English (auto-detected from the browser)
 - Two views: **Pro** (default, everything) and **Basic** (whether to trade today plus at most three instruments with direction, reason and stop) — switch in the top right corner
 - Built-in **How to use** guide in all three languages
@@ -206,10 +207,41 @@ Modes: off, alerts only, or a report after every group analysis. Alerts cover ne
 
 The bell in the top right corner shows the same events that are e-mailed — analysis ready for a market group, new or lost setups, regime and mode changes, changed advice for open positions — with an unread counter. It works without SMTP.
 
+## Accounts, sharing and messages
+
+On the first launch the app shows a form to create the **administrator account**; from then on everyone signs in with a username and password.
+
+- **Roles** — administrators manage accounts (Settings → Users) and server settings (data sources, instruments, time groups, SMTP, appearance); there can be several. Users use the analysis and keep their own portfolio.
+- **Per-account data** — open positions, trade history, capital, risk limits, position notifications and messages belong to the account. The market analysis is shared. Data from before accounts existed is handed to the first administrator.
+- **Share a portfolio** — on the Portfolio page tick "Share my portfolio" and pick people; they get a read-only view of your positions, results and trades.
+- **Share a single trade** — the share icon at the end of each trade row (Settings → Capital) sends the trade card with an optional message.
+- **Messages** — the envelope next to the bell opens conversations between users, with an unread counter.
+- **Appearance** — administrators choose the sign-in screen background and the app background in Settings → General.
+- **E-mail** — H4 position mails go to the account's own e-mail address (an administrator without one falls back to the general recipients). Group reports go to the general recipients from the SMTP settings.
+
+### Forgotten password
+
+An administrator can set a new password for anyone in Settings → Users. If no administrator can sign in, reset it on the server.
+
+Docker:
+
+```bash
+docker exec kumodesk node server/reset-password.js <username> <new-password>
+```
+
+Proxmox (on the host):
+
+```bash
+pct exec <CTID> -- runuser -u kumodesk -- env DATA_DIR=/var/lib/kumodesk node /opt/kumodesk/server/reset-password.js <username> <new-password>
+```
+
 ## Security
 
-There is no login screen yet. Keep the app on your LAN or put it behind a reverse proxy with authentication.
-The SMTP password is stored in the SQLite database in `DATA_DIR`.
+- Passwords are stored as salted scrypt hashes; sessions live in an HttpOnly, SameSite cookie for 30 days and are revoked on password change.
+- Every API route except sign-in requires a session; server settings and user management require the administrator role.
+- After 8 failed sign-in attempts for a username from one address, further attempts are refused for 5 minutes.
+- The app speaks plain HTTP. On a trusted LAN that is usually fine; anywhere else put it behind a reverse proxy with HTTPS (the session cookie is marked `Secure` when the proxy sends `X-Forwarded-Proto: https`).
+- The SMTP password and API keys are stored in the SQLite database in `DATA_DIR`; protect that directory and its backups.
 
 ## Development
 

@@ -3,20 +3,23 @@ import * as db from './db.js';
 import { fetchInstrument, fetchInstrumentH4, fetchInstrumentH1 } from './providers/index.js';
 import { computeSessions } from './sessions.js';
 import { analyzeMarket, summarize, diffAlerts } from './analysis.js';
-import { sendReport, sendPositionsReport, smtpConfigured } from './mailer.js';
+import { sendReport, sendPositionsReport, smtpConfigured, smtpReady } from './mailer.js';
 import { advisePosition, closedH4, ACTION_RANK } from './positions.js';
 
-let cache = null;
-export const invalidate = () => { cache = null; };
+// Obraz rynku zależy od portfela i limitów użytkownika, więc pamięć podręczna jest osobna dla każdego.
+// Klucz 0 = sam rynek, bez pozycji (migawki, raporty grup, alerty wspólne).
+const cache = new Map();
+export const invalidate = () => cache.clear();
 
 export const job = { running: false, trigger: null, group: null, total: 0, done: 0, current: null, errors: [], startedAt: null, finishedAt: null };
 
 /** Aktualny obraz rynku liczony z danych w bazie (z pamięcią podręczną na 60 s). */
-export function getMarket() {
-  const now = Date.now();
-  if (cache && now - cache.at < 60000) return cache.market;
+export function getMarket(userId = null) {
+  const key = userId || 0, now = Date.now();
+  const hit = cache.get(key);
+  if (hit && now - hit.at < 60000) return hit.market;
   const instruments = db.listInstruments();
-  const settings = db.getSettings();
+  const settings = db.getSettings(userId);
   const candlesById = {};
   for (const i of instruments) if (i.enabled) candlesById[i.id] = db.getCandles(i.id);
   const groupsById = Object.fromEntries(db.listGroups().map((g) => [g.id, g]));
@@ -27,8 +30,9 @@ export function getMarket() {
     for (const p of pairs) h1[p.id] = db.getH1(p.id);
     if (pairs.some((p) => h1[p.id].length)) sessions = computeSessions(h1, pairs);
   }
-  const market = analyzeMarket({ instruments, candlesById, groupsById, positions: db.listPositions(), settings, sessions });
-  cache = { at: now, market };
+  const market = analyzeMarket({ instruments, candlesById, groupsById, positions: userId ? db.listPositions(userId) : [], settings, sessions });
+  cache.set(key, { at: now, market });
+  if (cache.size > 200) cache.delete(cache.keys().next().value);
   return market;
 }
 
@@ -95,14 +99,14 @@ export async function refresh({ groupId = null, trigger = 'manual' } = {}) {
 }
 
 /**
- * Analiza otwartych pozycji na świecach H4. Pobiera H4 tylko dla instrumentów z pozycjami,
- * wylicza poradę, zapisuje ją przy pozycji i zgłasza zmiany.
- * Zwraca { checked, changed: [...], errors, mail }.
+ * Analiza otwartych pozycji na świecach H4 – wszystkich użytkowników albo jednego (userId).
+ * Pobiera H4 tylko dla instrumentów z pozycjami, wylicza poradę, zapisuje ją przy pozycji
+ * i zgłasza zmiany właścicielowi pozycji (dzwonek, e-mail).
  */
-export async function checkPositions({ trigger = 'manual' } = {}) {
+export async function checkPositions({ trigger = 'manual', userId = null } = {}) {
   if (job.running) throw new Error('BUSY');
-  const settings = db.getSettings();
-  const positions = db.listPositions();
+  const global = db.getSettings();
+  const positions = db.listPositions(userId);
   if (!positions.length) return { checked: 0, changed: [], errors: [], mail: null };
   const ids = [...new Set(positions.map((p) => p.instrument_id))];
   Object.assign(job, { running: true, trigger: `h4:${trigger}`, group: 'H4', total: ids.length, done: 0, current: null, errors: [], startedAt: new Date().toISOString(), finishedAt: null });
@@ -112,38 +116,47 @@ export async function checkPositions({ trigger = 'manual' } = {}) {
       const inst = db.getInstrument(id);
       try {
         if (!inst) throw new Error('unknown instrument');
-        const { bars } = await fetchInstrumentH4(inst, settings);
+        const { bars } = await fetchInstrumentH4(inst, global);
         db.saveH4(id, bars);
       } catch (e) { job.errors.push({ id, error: e.message }); }
       job.done++;
     }
-    const market = getMarket();
-    const byId = Object.fromEntries(market.instruments.map((a) => [a.id, a]));
     const now = new Date();
-    const results = [], changed = [];
-    for (const pos of positions) {
-      const advice = advisePosition(pos, byId[pos.instrument_id], closedH4(db.getH4(pos.instrument_id), now), settings);
-      const prev = pos.advice?.action ?? null;
-      db.saveAdvice(pos.id, advice);
-      const row = { ...pos, advice, previous: prev };
-      results.push(row);
-      if (advice.action !== 'NO_DATA' && prev !== advice.action && !(prev == null && advice.action === 'HOLD')) changed.push(row);
+    const owners = [...new Set(positions.map((p) => p.user_id))];
+    const all = [], allChanged = [];
+    const mails = [];
+    for (const owner of owners) {
+      const settings = db.getSettings(owner);
+      const market = getMarket(owner);
+      const byId = Object.fromEntries(market.instruments.map((a) => [a.id, a]));
+      const results = [], changed = [];
+      for (const pos of positions.filter((p) => p.user_id === owner)) {
+        const advice = advisePosition(pos, byId[pos.instrument_id], closedH4(db.getH4(pos.instrument_id), now), settings);
+        const prev = pos.advice?.action ?? null;
+        db.saveAdvice(pos.id, advice);
+        const row = { ...pos, advice, previous: prev };
+        results.push(row);
+        if (advice.action !== 'NO_DATA' && prev !== advice.action && !(prev == null && advice.action === 'HOLD')) changed.push(row);
+      }
+      all.push(...results); allChanged.push(...changed);
+      if (changed.length) {
+        db.saveAlerts(changed.map((c) => ({
+          type: 'POSITION_H4', severity: ACTION_RANK[c.advice.action] >= 4 ? 'HIGH' : ACTION_RANK[c.advice.action] >= 2 ? 'MED' : 'LOW',
+          instrument_id: c.instrument_id, user_id: owner,
+          message: JSON.stringify({ code: 'alert.h4', params: { id: c.instrument_id, dir: c.direction, action: c.advice.action, reason: c.advice.reason } }),
+        })));
+      }
+      // e-mail do właściciela pozycji; administrator bez własnego adresu dostaje go na adres ogólny
+      const user = owner ? db.getUser(owner) : null;
+      const to = user?.email || (!user || user.role === 'admin' ? global.smtp.to : null);
+      const mode = global.notify.positions;
+      if (trigger === 'schedule' && to && smtpReady(global) && (mode === 'always' || (mode === 'changes' && changed.length))) {
+        try { await sendPositionsReport({ results, changed, settings, to }); mails.push('sent'); }
+        catch (e) { mails.push(`error: ${e.message}`); console.error('[mail]', e.message); }
+      }
     }
     invalidate();
-    if (changed.length) {
-      db.saveAlerts(changed.map((c) => ({
-        type: 'POSITION_H4', severity: ACTION_RANK[c.advice.action] >= 4 ? 'HIGH' : ACTION_RANK[c.advice.action] >= 2 ? 'MED' : 'LOW',
-        instrument_id: c.instrument_id,
-        message: JSON.stringify({ code: 'alert.h4', params: { id: c.instrument_id, dir: c.direction, action: c.advice.action, reason: c.advice.reason } }),
-      })));
-    }
-    let mail = null;
-    const mode = settings.notify.positions;
-    if (trigger === 'schedule' && smtpConfigured(settings) && (mode === 'always' || (mode === 'changes' && changed.length))) {
-      try { await sendPositionsReport({ results, changed, settings }); mail = 'sent'; }
-      catch (e) { mail = `error: ${e.message}`; console.error('[mail]', e.message); }
-    }
-    return { checked: results.length, changed: changed.map((c) => `${c.instrument_id}:${c.advice.action}`), errors: job.errors, mail };
+    return { checked: all.length, changed: allChanged.map((c) => `${c.instrument_id}:${c.advice.action}`), errors: job.errors, mail: mails.length ? mails.join(',') : null };
   } finally {
     Object.assign(job, { running: false, current: null, finishedAt: new Date().toISOString() });
   }

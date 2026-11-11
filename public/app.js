@@ -36,9 +36,13 @@ async function api(path, opts = {}) {
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && !path.startsWith('/auth/') && me) { me = null; showAuth(); }
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
+let me = null;            // zalogowany użytkownik
+let lookCfg = { loginBg: 'aurora', appBg: 'default' };
+const isAdmin = () => me?.role === 'admin';
 let toastTimer;
 function toast(msg, badTone = false) {
   const el = $('#toast');
@@ -596,6 +600,7 @@ async function viewPortfolio() {
   if (!pf.threats.length) thr.append(h('p', { class: 'muted' }, T('threats.none')));
   pf.threats.forEach((x) => thr.append(h('div', { class: 'threat' }, h('span', { class: `lv ${x.level}` }, T('level.' + x.level)), h('span', null, T(x.code, x.params)))));
 
+  try { root.append(await shareBox()); } catch { /* sekcja udostępniania jest opcjonalna */ }
   if (pf.positions.length) root.append(positionsCard(pf.positions, false));
   root.append(h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h3', null, T('pf.positions'),
       pf.positions.length ? h('button', { class: 'btn sm', onclick: async () => { try { await api('/positions/check', { method: 'POST' }); wasRunning = true; poll(); } catch (e) { toast(e.message === 'BUSY' ? T('refresh.busy') : TE(e.message), true); } } }, T('h4.checkNow')) : null), table),
@@ -627,7 +632,8 @@ async function viewHistory() {
 let settingsTab = 'general';
 async function viewSettings() {
   const root = h('div', null, h('div', { class: 'muted' }, T('loading')));
-  const [{ settings: s, providers, classes }, groups, instruments] = await Promise.all([api('/settings'), api('/groups'), api('/instruments')]);
+  const [{ settings: s, providers, classes, loginBgs, appBgs }, groups, instruments] = await Promise.all([api('/settings'), api('/groups'), api('/instruments')]);
+  usersCache = null;
   const save = async (patch, msg = T('saved')) => {
     try { await api('/settings', { method: 'PUT', body: patch }); toast(msg); await loadMarket(); return true; }
     catch (e) { toast(TE(e.message), true); return false; }
@@ -642,10 +648,61 @@ async function viewSettings() {
     general() {
       const f = h('form', { class: 'form' },
         field(T('set.uiLang'), h('select', { name: 'ui' }, ['auto', 'pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === langPref }, l === 'auto' ? T('set.auto') : T('lang.' + l)))), T('set.uiLang.hint')),
-        field(T('set.mailLang'), h('select', { name: 'mail' }, ['pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === (s.notify.lang || lang) }, T('lang.' + l))))),
+        isAdmin() ? field(T('set.mailLang'), h('select', { name: 'mail' }, ['pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === (s.notify.lang || lang) }, T('lang.' + l))))) : null,
         h('div', null, h('button', { class: 'btn primary' }, T('save'))));
-      f.onsubmit = async (e) => { e.preventDefault(); const d = formData(f); await save({ notify: { lang: d.mail } }); setLang(d.ui); };
-      return h('div', { class: 'card' }, h('h3', null, T('set.tab.general')), f, h('p', { class: 'hint' }, `KumoDesk ${status?.version || ''}`));
+      f.onsubmit = async (e) => { e.preventDefault(); const d = formData(f); if (isAdmin()) await save({ notify: { lang: d.mail } }); setLang(d.ui); };
+      // konto: e-mail i zmiana hasła
+      const acc = h('form', { class: 'form' },
+        field(T('auth.username'), h('input', { type: 'text', value: me.username, disabled: true })),
+        field(T('acc.email'), h('input', { type: 'email', name: 'email', value: me.email || '', autocomplete: 'email' }), T('acc.email.hint')),
+        field(T('acc.current'), h('input', { type: 'password', name: 'current', autocomplete: 'current-password' })),
+        field(T('acc.new'), h('input', { type: 'password', name: 'password', autocomplete: 'new-password', minlength: 8 }), T('auth.rules')),
+        h('div', null, h('button', { class: 'btn primary' }, T('save'))));
+      acc.onsubmit = async (e) => {
+        e.preventDefault(); const d = formData(acc);
+        try { const r = await api('/account', { method: 'PUT', body: { email: d.email, ...(d.password ? { current: d.current, password: d.password } : {}) } }); me = r.user; toast(T('saved')); render(); }
+        catch (ex) { toast(TE(ex.message), true); }
+      };
+      // wygląd: tło ekranu logowania i tło aplikacji (dla wszystkich)
+      let look = null;
+      if (isAdmin()) {
+        const preview = (kind, id) => h('span', { class: `bgprev ${kind}-${id}` }, kind === 'lbg' ? h('span', { class: 'authbg' }, h('i'), h('i'), h('i')) : null);
+        const radios = (name, list, cur, kind) => h('div', { class: 'bgpick' }, list.map((id) => h('label', { class: 'bgopt' }, h('input', { type: 'radio', name, value: id, checked: id === cur }), preview(kind, id), h('span', null, T('bg.' + id)))));
+        look = h('form', null, h('div', { class: 'k muted small', style: 'margin-bottom:6px' }, T('look.loginBg')), radios('loginBg', loginBgs, s.appearance.loginBg, 'lbg'),
+          h('div', { class: 'k muted small', style: 'margin:14px 0 6px' }, T('look.appBg')), radios('appBg', appBgs, s.appearance.appBg, 'abg'),
+          h('div', { class: 'actions' }, h('button', { class: 'btn primary' }, T('save'))));
+        look.onsubmit = async (e) => { e.preventDefault(); const d = formData(look); if (await save({ appearance: d })) { lookCfg = d; document.body.dataset.bg = d.appBg; render(); } };
+      }
+      return h('div', null,
+        h('div', { class: 'card' }, h('h3', null, T('set.tab.general')), f, h('p', { class: 'hint' }, `KumoDesk ${status?.version || ''}`)),
+        h('div', { class: 'card section-gap' }, h('h3', null, T('acc.title'), h('span', { class: 'muted small' }, T('user.role.' + me.role))), acc),
+        look ? h('div', { class: 'card section-gap' }, h('h3', null, T('look.title')), look, h('p', { class: 'hint' }, T('look.hint'))) : '');
+    },
+    users() {
+      const box = h('div', null, h('div', { class: 'muted' }, T('loading')));
+      const userDialog = (u) => {
+        const f = h('form', { class: 'form' },
+          field(T('auth.username'), h('input', { type: 'text', name: 'username', value: u?.username || '', required: true, disabled: !!u, minlength: 3, maxlength: 32, autocomplete: 'off' })),
+          field(T('usr.role'), h('select', { name: 'role' }, ['user', 'admin'].map((r) => h('option', { value: r, selected: r === (u?.role || 'user') }, T('user.role.' + r))))),
+          field(T('acc.email'), h('input', { type: 'email', name: 'email', value: u?.email || '', autocomplete: 'off' })),
+          field(T('auth.password'), h('input', { type: 'password', name: 'password', required: !u, minlength: 8, autocomplete: 'new-password', placeholder: u ? T('usr.password.keep') : '' }), T('auth.rules')));
+        dialog(u ? T('usr.edit', { name: u.username }) : T('usr.add'), f, async () => {
+          const d = formData(f);
+          await api(u ? `/users/${u.id}` : '/users', { method: u ? 'PUT' : 'POST', body: u ? { role: d.role, email: d.email, ...(d.password ? { password: d.password } : {}) } : d });
+        }, T('usr.hint'));
+      };
+      api('/users').then((list) => {
+        box.replaceChildren(h('div', { class: 'card' }, h('h3', null, T('set.tab.users'), h('button', { class: 'btn sm', onclick: () => userDialog(null) }, '+ ' + T('usr.add'))),
+          h('div', { class: 'tablewrap' }, h('table', null,
+            h('thead', null, h('tr', null, [T('auth.username'), T('usr.role'), T('acc.email'), T('usr.created'), ''].map((x) => h('th', null, x)))),
+            h('tbody', null, list.map((u) => h('tr', null,
+              h('td', null, h('span', { class: 'nowrap' }, h('span', { class: 'avatar', style: 'margin-right:8px' }, u.username.slice(0, 1).toUpperCase()), h('b', null, u.username), u.id === me.id ? h('span', { class: 'name' }, T('usr.you')) : null)),
+              h('td', null, T('user.role.' + u.role)), h('td', { class: 'muted' }, u.email || '–'), h('td', { class: 'muted small' }, fmtTs(u.created)),
+              h('td', { class: 'nowrap' }, h('button', { class: 'btn sm', onclick: () => userDialog(u) }, T('edit')), ' ',
+                u.id !== me.id ? h('button', { class: 'btn sm danger', onclick: async () => { if (!confirm(T('usr.confirmDelete', { name: u.username }))) return; try { await api(`/users/${u.id}`, { method: 'DELETE' }); render(); } catch (e) { toast(TE(e.message), true); } } }, T('delete')) : null)))))),
+          h('p', { class: 'hint' }, T('usr.info'))));
+      }).catch((e) => box.replaceChildren(h('div', { class: 'card err' }, TE(e.message))));
+      return box;
     },
     data() {
       const f = h('form', { class: 'form' },
@@ -809,7 +866,9 @@ async function viewSettings() {
               h('td', { class: 'num' }, t.r != null ? signed(t.r, 2) + ' R' : '–'),
               h('td', { class: 'num nowrap' }, h('span', { class: `dot ${t.pnl > 0 ? 'good' : t.pnl < 0 ? 'crit' : ''}`, style: 'display:inline-block;margin-right:6px' }), (t.pnl > 0 ? '+' : '') + money(t.pnl)),
               h('td', { class: 'num' }, t.pnlPct != null ? signed(t.pnlPct, 2) + '%' : '–'), h('td', { class: 'num' }, money(t.equity, 0)),
-              h('td', null, h('button', { class: 'btn sm danger', onclick: async () => { if (!confirm(T('cap.confirmDelete', { id: t.instrument_id }))) return; await api(`/trades/${t.id}`, { method: 'DELETE' }); render(); } }, T('delete'))))))))) : null;
+              h('td', { class: 'nowrap' }, h('button', { class: 'btn sm iconbtn', title: T('share.trade'), 'aria-label': T('share.trade'), onclick: () => shareTradeDialog(t),
+                html: '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M18 8a3 3 0 1 0-2.8-4 3 3 0 0 0 0 1.6L8.6 9.2a3 3 0 1 0 0 5.6l6.6 3.6A3 3 0 1 0 16 16.7l-6.5-3.6a3 3 0 0 0 0-2.2L16 7.3A3 3 0 0 0 18 8z" fill="currentColor"/></svg>' }), ' ',
+                h('button', { class: 'btn sm danger', onclick: async () => { if (!confirm(T('cap.confirmDelete', { id: t.instrument_id }))) return; await api(`/trades/${t.id}`, { method: 'DELETE' }); render(); } }, T('delete'))))))))) : null;
         box.replaceChildren(h('div', { class: 'card' }, h('h3', null, T('set.tab.capital')), f, h('p', { class: 'hint' }, T('cap.hint'))), h('div', { class: 'section-gap' }, tiles), charts, table || '');
       }).catch((e) => box.replaceChildren(h('div', { class: 'card err' }, TE(e.message))));
       return box;
@@ -886,7 +945,8 @@ async function viewSettings() {
     document.body.append(dlg); dlg.showModal();
   }
 
-  const tabs = ['general', 'capital', 'data', 'analysis', 'groups', 'instruments', 'notify', 'risk'];
+  const tabs = isAdmin() ? ['general', 'users', 'capital', 'data', 'analysis', 'groups', 'instruments', 'notify', 'risk'] : ['general', 'capital', 'risk'];
+  if (!tabs.includes(settingsTab)) settingsTab = 'general';
   const body = h('div');
   const tabBar = h('div', { class: 'tabs' }, tabs.map((k) => h('button', { class: k === settingsTab ? 'on' : '', onclick: () => { settingsTab = k; render(); } }, T('set.tab.' + k))));
   body.append(panes[settingsTab]());
@@ -909,6 +969,150 @@ function viewHelp() {
   return root;
 }
 
+// ---------- LOGOWANIE ----------
+async function showAuth() {
+  let st;
+  try { st = await api('/auth/state'); } catch { st = { setup: false, user: null, appearance: lookCfg }; }
+  lookCfg = st.appearance || lookCfg;
+  document.body.dataset.bg = lookCfg.appBg;
+  if (st.user) { me = st.user; $('#auth').hidden = true; document.body.classList.remove('locked'); return true; }
+  const setup = st.setup;
+  const err = h('div', { class: 'err small', role: 'alert' });
+  const user = h('input', { type: 'text', name: 'username', autocomplete: 'username', required: true, minlength: 3, maxlength: 32, autofocus: true });
+  const pass = h('input', { type: 'password', name: 'password', autocomplete: setup ? 'new-password' : 'current-password', required: true, minlength: setup ? 8 : 1 });
+  const pass2 = h('input', { type: 'password', name: 'password2', autocomplete: 'new-password', required: true, minlength: 8 });
+  const email = h('input', { type: 'email', name: 'email', autocomplete: 'email' });
+  const btn = h('button', { class: 'btn primary' }, T(setup ? 'auth.submit.setup' : 'auth.submit.login'));
+  const form = h('form', { class: 'authform' },
+    h('label', null, T('auth.username'), user),
+    h('label', null, T('auth.password'), pass),
+    setup ? h('label', null, T('auth.password2'), pass2) : null,
+    setup ? h('label', null, T('auth.email'), email, h('span', { class: 'muted' }, T('auth.email.hint'))) : null,
+    err, btn,
+    setup ? h('p', { class: 'hint' }, T('auth.rules')) : null);
+  form.onsubmit = async (e) => {
+    e.preventDefault(); err.textContent = '';
+    if (setup && pass.value !== pass2.value) { err.textContent = T('auth.mismatch'); return; }
+    btn.disabled = true;
+    try {
+      const r = await api(setup ? '/auth/setup' : '/auth/login', { method: 'POST', body: { username: user.value.trim(), password: pass.value, email: email.value.trim() } });
+      me = r.user; $('#auth').hidden = true; document.body.classList.remove('locked');
+      startApp();
+    } catch (ex) { err.textContent = TE(ex.message); pass.value = ''; pass.focus(); }
+    btn.disabled = false;
+  };
+  const langSel = h('select', { class: 'lang', 'aria-label': 'Language', onchange: (e) => { langPref = e.target.value; store.set('kd.lang', langPref); lang = langPref === 'auto' ? detectLang(navigator.languages || [navigator.language]) : resolveLang(langPref); showAuth(); } },
+    ['auto', 'pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === langPref }, l === 'auto' ? 'Auto' : t(l, 'lang.' + l))));
+  const el = $('#auth');
+  el.className = `auth lbg-${lookCfg.loginBg}`;
+  el.replaceChildren(
+    h('div', { class: 'authbg', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')),
+    h('div', { class: 'authcard' },
+      h('div', { class: 'authbrand', html: '<svg viewBox="0 0 32 32" width="34" height="34" aria-hidden="true"><path d="M3 21c5-9 9 2 13-6s7-6 13-8" fill="none" stroke="var(--line-tenkan)" stroke-width="3" stroke-linecap="round"/><path d="M3 27c6-5 10 1 14-3s7-3 12-5" fill="none" stroke="var(--line-kijun)" stroke-width="3" stroke-linecap="round"/></svg><span>KumoDesk</span>' }),
+      h('h1', null, T(setup ? 'auth.setup.title' : 'auth.login.title')),
+      h('p', { class: 'muted' }, T(setup ? 'auth.setup.sub' : 'auth.login.sub')),
+      form,
+      h('div', { class: 'authfoot' }, langSel, h('span', { class: 'muted small' }, st.version ? `v${st.version}` : ''))));
+  el.hidden = false; document.body.classList.add('locked');
+  setTimeout(() => user.focus(), 30);
+  return false;
+}
+async function logout() { try { await api('/auth/logout', { method: 'POST' }); } catch { /* i tak wylogowujemy */ } me = null; market = null; status = null; location.hash = '#/'; showAuth(); }
+
+// ---------- UDOSTĘPNIANIE ZAGRAŃ I WIADOMOŚCI ----------
+let usersCache = null;
+async function otherUsers() { if (!usersCache) usersCache = await api('/users'); return usersCache.filter((u) => u.id !== me.id); }
+function tradeCard(tr) {
+  const cur = tr.currency || '';
+  return h('div', { class: 'tradecard' },
+    h('div', { class: 'pos-head' }, h('b', null, tr.instrument_id), dirBadge(tr.direction), tr.r != null ? h('span', { class: 'badge' }, `${signed(tr.r, 2)} R`) : null,
+      tr.pnl != null ? h('span', { class: 'num' }, `${tr.pnl > 0 ? '+' : ''}${Number(tr.pnl).toLocaleString(lang, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}`) : null,
+      tr.pnlPct != null ? h('span', { class: 'muted small' }, `${signed(tr.pnlPct, 2)}%`) : null),
+    h('div', { class: 'muted small' }, `${tr.opened || '–'} → ${tr.closed} · ${T('pf.entry')} ${tr.entry != null ? fmtPrice(tr.entry) : '–'} · ${T('close.exit')} ${tr.exit != null ? fmtPrice(tr.exit) : '–'} · ${T('pf.risk')} ${tr.risk_pct}%`));
+}
+async function shareTradeDialog(tr) {
+  const users = await otherUsers();
+  if (!users.length) { toast(T('share.noUsers'), true); return; }
+  const to = h('select', { name: 'to', required: true }, users.map((u) => h('option', { value: u.id }, u.username)));
+  const body = h('textarea', { name: 'body', rows: 3, maxlength: 2000, placeholder: T('msg.placeholder'), style: 'font:inherit' });
+  const form = h('form', { class: 'ticket' }, tradeCard({ ...tr, currency: capitalCfg.currency }),
+    h('div', { class: 'form' }, h('label', null, T('share.to'), to), h('label', { class: 'wide' }, T('share.message'), body)));
+  openDialog(T('share.trade.title'), form, async () => {
+    await api('/messages', { method: 'POST', body: { to: Number(to.value), body: body.value, trade_id: tr.id } });
+    toast(T('share.sent', { name: to.selectedOptions[0].textContent }));
+  }, { saveLabel: T('share.send'), cls: 'ticket-dlg' });
+}
+async function viewMessages(otherId) {
+  const root = h('div', null, h('div', { class: 'muted' }, T('loading')));
+  const [threads, users] = await Promise.all([api('/messages'), otherUsers()]);
+  const byUser = Object.fromEntries(threads.map((x) => [x.user.id, x]));
+  const order = [...threads.map((x) => x.user), ...users.filter((u) => !byUser[u.id]).map((u) => ({ id: u.id, username: u.username }))];
+  if (!otherId && order.length) otherId = order[0].id;
+  const list = h('div', { class: 'card msglist' }, h('h3', null, T('msg.title')),
+    order.length ? order.map((u) => h('a', { class: 'msguser' + (u.id === otherId ? ' on' : ''), href: `#/messages?u=${u.id}` },
+      h('span', { class: 'avatar' }, u.username.slice(0, 1).toUpperCase()), h('span', { class: 'grow' }, h('b', null, u.username),
+        h('div', { class: 'muted small clip' }, byUser[u.id] ? (byUser[u.id].last.body || (byUser[u.id].last.trade ? T('msg.trade') : '')) : T('msg.new'))),
+      byUser[u.id]?.unread && u.id !== otherId ? h('span', { class: 'bellcount', style: 'position:static' }, byUser[u.id].unread) : null))
+      : h('p', { class: 'muted' }, T('share.noUsers')));
+  const panel = h('div', { class: 'card msgpanel' });
+  if (otherId) {
+    const d = await api(`/messages/${otherId}`);
+    const box = h('div', { class: 'msgs' }, d.messages.length ? d.messages.map((m) => h('div', { class: 'msg' + (m.from_id === me.id ? ' mine' : '') },
+      m.trade ? tradeCard(m.trade) : null, m.body ? h('div', { class: 'msgbody' }, m.body) : null,
+      h('div', { class: 'muted small' }, `${m.from_id === me.id ? T('msg.you') : d.user.username} · ${fmtTs(m.ts)}`))) : h('p', { class: 'muted' }, T('msg.empty')));
+    const input = h('textarea', { rows: 2, maxlength: 2000, placeholder: T('msg.placeholder'), required: true, style: 'font:inherit' });
+    const form = h('form', { class: 'msgform' }, input, h('button', { class: 'btn primary' }, T('msg.send')));
+    form.onsubmit = async (e) => { e.preventDefault(); try { await api('/messages', { method: 'POST', body: { to: otherId, body: input.value } }); render(); } catch (ex) { toast(TE(ex.message), true); } };
+    input.onkeydown = (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) form.requestSubmit(); };
+    panel.append(h('h3', null, d.user.username), box, form);
+    setTimeout(() => { box.scrollTop = box.scrollHeight; }, 0);
+    if (status?.mail) { status.mail.unread = Math.max(0, status.mail.unread - (byUser[otherId]?.unread || 0)); updateBell(); }
+  } else panel.append(h('p', { class: 'muted' }, T('msg.pick')));
+  root.replaceChildren(h('div', { class: 'msggrid' }, list, panel));
+  return root;
+}
+
+/** Portfel innego użytkownika, który go udostępnił – tylko do odczytu. */
+async function viewSharedPortfolio(ownerId) {
+  const root = h('div', null, h('div', { class: 'muted' }, T('loading')));
+  let d;
+  try { d = await api(`/portfolio/${ownerId}`); } catch (e) { return h('div', { class: 'card err' }, TE(e.message)); }
+  const pf = d.portfolio, st = d.stats, cur = d.capital.currency;
+  const mny = (v, dg = 0) => (v == null ? '–' : `${Number(v).toLocaleString(lang, { minimumFractionDigits: dg, maximumFractionDigits: dg })} ${cur}`);
+  const stat = (k, v, sub) => h('div', { class: 'card tile tone-none' }, h('div', { class: 'k' }, T(k)), h('div', { class: 'v' }, v), h('div', { class: 's' }, sub || ''));
+  const prev = capitalCfg; capitalCfg = { ...capitalCfg, currency: cur }; // wykresy opisują walutę właściciela
+  root.replaceChildren(
+    h('div', { class: 'card banner' }, h('a', { class: 'btn', href: '#/portfolio' }, '← ' + T('share.mine')), h('span', { class: 'mode' }, T('share.viewing', { name: d.owner.username })), h('span', { class: 'txt' }, T('share.readonly'))),
+    pf.positions.length ? positionsCard(pf.positions, true) : h('div', { class: 'card', style: 'margin-bottom:14px' }, h('p', { class: 'muted' }, T('pf.none'))),
+    h('div', { class: 'grid captiles', style: 'margin-bottom:14px' },
+      stat('cap.t.equity', mny(st.equity), st.returnPct != null ? `${signed(st.returnPct, 2)}%` : ''), stat('cap.t.profit', (st.profit > 0 ? '+' : '') + mny(st.profit), T('cap.t.profit.sub', { n: st.trades })),
+      stat('cap.t.winRate', st.winRate != null ? st.winRate + '%' : '–', T('cap.t.winRate.sub', { w: st.wins, l: st.losses })), stat('cap.t.avg', st.avgR != null ? `${signed(st.avgR, 2)} R` : '–', T('cap.t.open.sub', { n: pf.positions.length }))),
+    d.trades.length ? h('div', { class: 'grid two', style: 'margin-bottom:14px' },
+      h('div', { class: 'card' }, h('h3', null, T('cap.chart.equity'), h('span', { class: 'muted small' }, cur)), h('div', { html: equityChart(d.curve, st.start) })),
+      h('div', { class: 'card' }, h('h3', null, T('cap.chart.trades'), h('span', { class: 'muted small' }, cur)), h('div', { html: tradeBars(d.trades) }))) : '',
+    d.trades.length ? h('div', { class: 'card' }, h('h3', null, T('cap.table')), h('div', { class: 'tablewrap' }, h('table', null,
+      h('thead', null, h('tr', null, [T('close.date'), T('col.instrument'), T('col.dir'), T('pf.risk'), T('pf.entry'), T('close.exit'), T('close.resultR'), T('close.resultMoney'), '%'].map((x) => h('th', null, x)))),
+      h('tbody', null, [...d.trades].reverse().map((t2) => h('tr', null, h('td', { class: 'small nowrap' }, t2.closed), h('td', null, h('b', null, t2.instrument_id)), h('td', null, dirBadge(t2.direction)), h('td', { class: 'num' }, t2.risk_pct + '%'),
+        h('td', { class: 'num' }, t2.entry != null ? fmtPrice(t2.entry) : '–'), h('td', { class: 'num' }, t2.exit != null ? fmtPrice(t2.exit) : '–'), h('td', { class: 'num' }, t2.r != null ? signed(t2.r, 2) + ' R' : '–'),
+        h('td', { class: 'num nowrap' }, (t2.pnl > 0 ? '+' : '') + mny(t2.pnl, 2)), h('td', { class: 'num' }, t2.pnlPct != null ? signed(t2.pnlPct, 2) + '%' : '–'))))))) : '');
+  capitalCfg = prev;
+  return root;
+}
+/** Sekcja „Udostępnij” na stronie portfela. */
+async function shareBox() {
+  const [sh, users] = await Promise.all([api('/shares'), otherUsers()]);
+  const card = h('div', { class: 'card', style: 'margin-bottom:14px' });
+  const chosen = new Set(sh.viewers);
+  const saveShares = async () => { try { await api('/shares', { method: 'PUT', body: { viewers: [...chosen] } }); toast(T('share.saved')); } catch (e) { toast(TE(e.message), true); } };
+  const pick = h('div', { class: 'chips', hidden: !chosen.size }, users.map((u) => { const b = h('button', { type: 'button', class: 'chip' + (chosen.has(u.id) ? ' on' : ''), onclick: () => { chosen.has(u.id) ? chosen.delete(u.id) : chosen.add(u.id); b.classList.toggle('on'); saveShares(); } }, u.username); return b; }));
+  const toggle = h('input', { type: 'checkbox', checked: chosen.size > 0, disabled: !users.length, onchange: (e) => { pick.hidden = !e.target.checked; if (!e.target.checked && chosen.size) { chosen.clear(); pick.querySelectorAll('.chip').forEach((c) => c.classList.remove('on')); saveShares(); } } });
+  card.append(h('div', { class: 'sharerow' },
+    h('label', { class: 'inline-check' }, toggle, h('b', null, T('share.portfolio'))), h('span', { class: 'muted small' }, users.length ? T('share.portfolio.hint') : T('share.noUsers')), pick));
+  if (sh.sharedWithMe.length) card.append(h('div', { class: 'sharerow', style: 'margin-top:10px' }, h('span', { class: 'muted small' }, T('share.withMe')),
+    h('span', { class: 'chips' }, sh.sharedWithMe.map((u) => h('a', { class: 'chip', href: `#/portfolio?u=${u.id}` }, u.username)))));
+  return card;
+}
+
 // ---------- DZWONEK ----------
 const BELL_ICON = { ANALYSIS: '◎', NEW_SETUP: '▲', UPGRADE: '▲', SETUP_LOST: '▽', REGIME: '↻', EXEC: '↻', POSITION: '!', POSITION_H4: '!' };
 function updateBell() {
@@ -916,6 +1120,18 @@ function updateBell() {
   el.hidden = !n; el.textContent = n > 99 ? '99+' : String(n);
   $('#bell').title = n ? T('bell.unread', { n }) : T('bell.title');
   $('#bell').setAttribute('aria-label', $('#bell').title);
+  const m = status?.mail?.unread || 0, mc = $('#mailcount');
+  mc.hidden = !m; mc.textContent = m > 99 ? '99+' : String(m);
+  $('#mailbtn').title = m ? T('msg.unread', { n: m }) : T('msg.title');
+  $('#mailbtn').setAttribute('aria-label', $('#mailbtn').title);
+}
+function renderUserMenu() {
+  if (!me) return;
+  $('#userbtn').replaceChildren(h('span', { class: 'avatar' }, me.username.slice(0, 1).toUpperCase()), h('span', { class: 'uname' }, me.username));
+  $('#usermenu').replaceChildren(
+    h('div', { class: 'bellhead' }, h('b', null, me.username), h('span', { class: 'muted small' }, T('user.role.' + me.role))),
+    h('a', { class: 'menuitem', href: '#/settings', onclick: () => { settingsTab = 'general'; $('#usermenu').hidden = true; } }, T('acc.title')),
+    h('button', { class: 'menuitem', onclick: () => { $('#usermenu').hidden = true; logout(); } }, T('user.logout')));
 }
 async function toggleBell(force) {
   const panel = $('#bellpanel');
@@ -943,14 +1159,16 @@ async function render() {
   route = location.hash || '#/';
   document.documentElement.lang = lang;
   $('#mode').replaceChildren(...['basic', 'pro'].map((mo) => h('button', { class: uiMode === mo ? 'on' : '', title: T('ui.' + mo + '.hint'), onclick: () => setMode(mo) }, T('ui.' + mo))));
-  $('#nav').replaceChildren(...NAV.filter(([href]) => uiMode === 'pro' || href !== '#/history').map(([href, key]) => h('a', { href, class: (route === href || (href === '#/' && route.startsWith('#/i/'))) ? 'active' : '' }, T(key))));
+  $('#nav').replaceChildren(...NAV.filter(([href]) => uiMode === 'pro' || href !== '#/history').map(([href, key]) => h('a', { href, class: (route === href || route.startsWith(href + '?') || (href === '#/' && route.startsWith('#/i/'))) ? 'active' : '' }, T(key))));
   $('#disclaimer').textContent = T('disclaimer');
   $('#lang').value = langPref;
-  updateJobInfo(); updateBell();
+  if (!me) return;
+  updateJobInfo(); updateBell(); renderUserMenu();
   let node;
   try {
     if (route.startsWith('#/i/')) { const [rid, q] = route.slice(4).split('?'); const qp = new URLSearchParams(q || ''); node = await viewInstrument(decodeURIComponent(rid), qp.get('tf') === 'h4' ? 'h4' : 'd1', qp.get('view') === 'live' ? 'live' : 'analysis'); }
-    else if (route === '#/portfolio') node = await viewPortfolio();
+    else if (route.startsWith('#/portfolio')) { const u = Number(new URLSearchParams(route.split('?')[1] || '').get('u')); node = u && u !== me.id ? await viewSharedPortfolio(u) : await viewPortfolio(); }
+    else if (route.startsWith('#/messages')) node = await viewMessages(Number(new URLSearchParams(route.split('?')[1] || '').get('u')) || null);
     else if (route === '#/history') node = await viewHistory();
     else if (route === '#/settings') node = await viewSettings();
     else if (route === '#/help') node = viewHelp();
@@ -976,6 +1194,7 @@ function updateJobInfo() {
 async function loadMarket() { market = await api('/dashboard'); }
 async function poll() {
   clearTimeout(pollTimer);
+  if (!me) return;
   try {
     status = await api('/status');
     const running = status.job.running;
@@ -1003,11 +1222,15 @@ function setLang(pref) {
 $('#refresh').onclick = () => startRefresh();
 $('#bell').onclick = (e) => { e.stopPropagation(); toggleBell(); };
 document.addEventListener('click', (e) => { if (!$('#bellpanel').hidden && !e.target.closest('.bellwrap')) toggleBell(false); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleBell(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { toggleBell(false); $('#usermenu').hidden = true; } });
+$('#userbtn').onclick = (e) => { e.stopPropagation(); $('#usermenu').hidden = !$('#usermenu').hidden; };
+document.addEventListener('click', (e) => { if (!$('#usermenu').hidden && !e.target.closest('#usermenu') && !e.target.closest('#userbtn')) $('#usermenu').hidden = true; });
 $('#lang').onchange = (e) => setLang(e.target.value);
 window.addEventListener('hashchange', render);
 
-(async function init() {
+let appStarted = false;
+async function startApp() {
+  usersCache = null;
   render();
   try {
     const [, st, cfg] = await Promise.all([loadMarket(), api('/status'), api('/settings')]);
@@ -1015,9 +1238,13 @@ window.addEventListener('hashchange', render);
     capitalCfg = cfg.settings.capital;
     api('/capital').then((c) => { currentEquity = c.stats.equity; }).catch(() => {});
     // pierwszy start: język e-maili = język przeglądarki
-    if (!cfg.settings.notify.lang) api('/settings', { method: 'PUT', body: { notify: { lang } } }).catch(() => {});
-  } catch (e) { toast(TE(e.message), true); }
+    if (isAdmin() && !cfg.settings.notify.lang) api('/settings', { method: 'PUT', body: { notify: { lang } } }).catch(() => {});
+  } catch (e) { if (me) toast(TE(e.message), true); }
   render();
   poll();
-  setInterval(async () => { if (!wasRunning && !document.hidden && !location.hash.startsWith('#/settings')) { try { await loadMarket(); if ((location.hash || '#/') === '#/') render(); } catch { /* pomiń */ } } }, 120000);
-})();
+  if (!appStarted) {
+    appStarted = true;
+    setInterval(async () => { if (me && !wasRunning && !document.hidden && !location.hash.startsWith('#/settings')) { try { await loadMarket(); if ((location.hash || '#/') === '#/') render(); } catch { /* pomiń */ } } }, 120000);
+  }
+}
+(async function boot() { if (await showAuth()) startApp(); })();

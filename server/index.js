@@ -10,19 +10,22 @@ import { getMarket, refresh, checkPositions, invalidate, job } from './runner.js
 import { closedH4 } from './positions.js';
 import { startScheduler } from './scheduler.js';
 import { sendTest, smtpConfigured } from './mailer.js';
+import * as auth from './auth.js';
 import { isValidTimezone, hhmmToMinutes, nextRun, localParts, isBarClosed } from './timeutil.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3003;
 const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
-const VERSION = '1.7.0';
+const VERSION = '2.0.0';
 
 db.openDb(path.join(DATA_DIR, 'kumodesk.db'));
 
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '200kb' }));
+app.use('/api', auth.requireAuth); // wszystko poza /api/auth/* wymaga zalogowania
+const admin = auth.requireAdmin;
 
 const wrap = (fn) => (req, res) => new Promise((resolve) => resolve(fn(req, res))).catch((e) => {
   const code = e.status || (e.message === 'BUSY' ? 409 : 500);
@@ -33,13 +36,139 @@ const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
 
 const CLASSES = ['fx', 'metal', 'index', 'commodity', 'crypto', 'stock', 'etf', 'other'];
 
-function publicSettings() {
-  const s = db.getSettings();
-  return { ...s, smtp: { ...s.smtp, pass: '', passSet: !!s.smtp.pass } };
+const LOGIN_BGS = ['aurora', 'kumo', 'grid', 'mesh', 'plain'];
+const APP_BGS = ['default', 'aurora', 'grid', 'midnight'];
+
+/** Ustawienia widoczne dla użytkownika: osobiste zawsze, dane serwera (SMTP, klucze) tylko dla administratora. */
+function publicSettings(user) {
+  const s = db.getSettings(user.id);
+  if (user.role === 'admin') return { ...s, smtp: { ...s.smtp, pass: '', passSet: !!s.smtp.pass } };
+  return { ...s, smtp: { host: '', port: 587, security: 'starttls', user: '', pass: '', from: '', to: '', passSet: false }, data: { ...s.data, twelvedataKey: '', stooqKey: '' } };
 }
 
+// ---------- logowanie ----------
+const appearance = () => db.getSettings().appearance;
+const loginKey = (req, username) => `${req.socket.remoteAddress}|${String(username || '').toLowerCase()}`;
+app.get('/api/auth/state', wrap((req, res) => {
+  res.json({ setup: db.countUsers() === 0, user: auth.currentUser(req), appearance: appearance(), version: VERSION });
+}));
+app.post('/api/auth/setup', wrap((req, res) => {
+  if (db.countUsers() > 0) throw Object.assign(new Error('err.setupDone'), { status: 409 });
+  const { username, password, email } = req.body || {};
+  if (!auth.validUsername(username)) throw bad('err.username');
+  if (!auth.validPassword(password)) throw bad('err.password');
+  const user = db.createUser({ username: String(username), pass_hash: auth.hashPassword(password), role: 'admin', email: String(email || '').trim().slice(0, 200) });
+  auth.startSession(req, res, user.id);
+  invalidate();
+  res.status(201).json({ user });
+}));
+app.post('/api/auth/login', wrap((req, res) => {
+  const { username, password } = req.body || {};
+  const key = loginKey(req, username);
+  if (!auth.loginAllowed(key)) throw Object.assign(new Error('err.loginLocked'), { status: 429 });
+  const u = db.getUserAuth(String(username || ''));
+  // sprawdzamy hasło także dla nieistniejącego loginu, żeby czas odpowiedzi nie zdradzał, czy konto istnieje
+  const ok = auth.verifyPassword(String(password || ''), u ? u.pass_hash : 'scrypt$00$00') && !!u;
+  if (!ok) { auth.loginFailed(key); throw Object.assign(new Error('err.loginBad'), { status: 401 }); }
+  auth.loginOk(key);
+  auth.startSession(req, res, u.id);
+  res.json({ user: db.getUser(u.id) });
+}));
+app.post('/api/auth/logout', wrap((req, res) => { auth.endSession(req, res); res.json({ ok: true }); }));
+
+// ---------- konto i użytkownicy ----------
+const cleanEmail = (e) => { const v = String(e || '').trim().slice(0, 200); if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw bad('err.email'); return v; };
+app.put('/api/account', wrap((req, res) => {
+  const b = req.body || {};
+  const patch = {};
+  if (b.email !== undefined) patch.email = cleanEmail(b.email);
+  if (b.password) {
+    if (!auth.verifyPassword(String(b.current || ''), db.getUserAuthById(req.user.id).pass_hash)) throw bad('err.passwordCurrent');
+    if (!auth.validPassword(b.password)) throw bad('err.password');
+    patch.pass_hash = auth.hashPassword(b.password);
+  }
+  const user = db.updateUser(req.user.id, patch);
+  if (patch.pass_hash) auth.startSession(req, res, user.id); // zmiana hasła wylogowuje inne urządzenia
+  res.json({ user });
+}));
+// lista do wyboru odbiorcy (udostępnianie, wiadomości): bez adresów e-mail dla zwykłych użytkowników
+app.get('/api/users', wrap((req, res) => res.json(db.listUsers().map((u) => (req.user.role === 'admin' ? u : { id: u.id, username: u.username, role: u.role })))));
+app.post('/api/users', admin, wrap((req, res) => {
+  const { username, password, role, email } = req.body || {};
+  if (!auth.validUsername(username)) throw bad('err.username');
+  if (!auth.validPassword(password)) throw bad('err.password');
+  if (db.getUserAuth(String(username))) throw bad('err.userExists');
+  res.status(201).json(db.createUser({ username: String(username), pass_hash: auth.hashPassword(password), role: role === 'admin' ? 'admin' : 'user', email: cleanEmail(email) }));
+}));
+app.put('/api/users/:id', admin, wrap((req, res) => {
+  const id = Number(req.params.id), cur = db.getUser(id);
+  if (!cur) return res.status(404).json({ error: 'err.notFound' });
+  const b = req.body || {}, patch = {};
+  if (b.role != null) {
+    patch.role = b.role === 'admin' ? 'admin' : 'user';
+    if (cur.role === 'admin' && patch.role !== 'admin' && db.countAdmins() <= 1) throw bad('err.lastAdmin');
+  }
+  if (b.email !== undefined) patch.email = cleanEmail(b.email);
+  if (b.password) { if (!auth.validPassword(b.password)) throw bad('err.password'); patch.pass_hash = auth.hashPassword(b.password); }
+  res.json(db.updateUser(id, patch));
+}));
+app.delete('/api/users/:id', admin, wrap((req, res) => {
+  const id = Number(req.params.id), cur = db.getUser(id);
+  if (!cur) return res.status(404).json({ error: 'err.notFound' });
+  if (id === req.user.id) throw bad('err.deleteSelf');
+  if (cur.role === 'admin' && db.countAdmins() <= 1) throw bad('err.lastAdmin');
+  db.deleteUser(id); invalidate();
+  res.json({ ok: true });
+}));
+
+// ---------- udostępnianie portfela ----------
+app.get('/api/shares', wrap((req, res) => res.json({ viewers: db.sharesOf(req.user.id), sharedWithMe: db.sharedWith(req.user.id) })));
+app.put('/api/shares', wrap((req, res) => {
+  const ids = Array.isArray(req.body?.viewers) ? req.body.viewers.map(Number).filter(Number.isInteger).slice(0, 500) : [];
+  db.setShares(req.user.id, ids);
+  res.json({ viewers: db.sharesOf(req.user.id) });
+}));
+// Portfel innego użytkownika – tylko gdy go udostępnił. Wyłącznie do odczytu.
+app.get('/api/portfolio/:userId', wrap((req, res) => {
+  const owner = db.getUser(Number(req.params.userId));
+  if (!owner || !db.canView(owner.id, req.user.id)) return res.status(403).json({ error: 'err.notShared' });
+  const s = db.getSettings(owner.id);
+  const market = getMarket(owner.id);
+  res.json({ owner: { id: owner.id, username: owner.username }, portfolio: market.portfolio, capital: s.capital, ...buildLedger(db.listTrades(owner.id), s.capital.start) });
+}));
+
+// ---------- wiadomości ----------
+function tradeSnapshot(userId, tradeId) {
+  const t = db.getTrade(tradeId);
+  if (!t || t.user_id !== userId) throw bad('err.tradeNotFound');
+  const s = db.getSettings(userId);
+  const row = buildLedger(db.listTrades(userId), s.capital.start).trades.find((x) => x.id === t.id);
+  return { instrument_id: t.instrument_id, direction: t.direction, risk_pct: t.risk_pct, entry: t.entry, stop_initial: t.stop_initial, exit: t.exit,
+    opened: t.opened, closed: t.closed, r: t.r, pnl: row?.pnl ?? null, pnlPct: row?.pnlPct ?? null, currency: s.capital.currency };
+}
+app.get('/api/messages', wrap((req, res) => {
+  const users = Object.fromEntries(db.listUsers().map((u) => [u.id, u.username]));
+  res.json(db.threadSummaries(req.user.id).filter((t) => users[t.other]).map((t) => ({ user: { id: t.other, username: users[t.other] }, unread: t.unread, last: t.last }))
+    .sort((a, b) => b.last.id - a.last.id));
+}));
+app.get('/api/messages/:userId', wrap((req, res) => {
+  const other = db.getUser(Number(req.params.userId));
+  if (!other) return res.status(404).json({ error: 'err.notFound' });
+  db.markThreadRead(req.user.id, other.id);
+  res.json({ user: { id: other.id, username: other.username }, messages: db.thread(req.user.id, other.id) });
+}));
+app.post('/api/messages', wrap((req, res) => {
+  const b = req.body || {};
+  const to = db.getUser(Number(b.to));
+  if (!to || to.id === req.user.id) throw bad('err.recipient');
+  const body = String(b.body || '').trim().slice(0, 2000);
+  const trade = b.trade_id != null ? tradeSnapshot(req.user.id, Number(b.trade_id)) : null;
+  if (!body && !trade) throw bad('err.messageEmpty');
+  res.status(201).json({ id: db.addMessage({ from_id: req.user.id, to_id: to.id, body, trade }) });
+}));
+
 // ---------- rynek ----------
-app.get('/api/dashboard', wrap((req, res) => res.json(getMarket())));
+app.get('/api/dashboard', wrap((req, res) => res.json(getMarket(req.user.id))));
 
 // Wykres „obecny”: dociąga świeże dane instrumentu, najwyżej raz na 5 minut.
 async function freshenForLiveView(inst, tf) {
@@ -64,7 +193,7 @@ app.get('/api/instrument/:id', wrap(async (req, res) => {
   const allH4 = db.getH4(inst.id);
   const tf = req.query.tf === 'h4' && allH4.length ? 'h4' : 'd1';
   if (view === 'live') { await freshenForLiveView(inst, tf); inst = db.getInstrument(inst.id); }
-  const market = getMarket();
+  const market = getMarket(req.user.id);
   const analysis = market.instruments.find((a) => a.id === inst.id) || null;
   const group = db.getGroup(inst.group_id);
   const settings = db.getSettings();
@@ -102,7 +231,9 @@ app.get('/api/status', wrap((req, res) => {
     job,
     smtpConfigured: smtpConfigured(s),
     provider: s.data.provider,
-    bell: { unread: db.countAlertsAfter(Number(db.getMeta('bellSeen') || 0)) },
+    bell: { unread: db.countAlertsAfter(db.getBellSeen(req.user.id), req.user.id) },
+    mail: { unread: db.unreadMessages(req.user.id) },
+    user: req.user,
     h4: { enabled: !!s.h4.enabled, last: db.getMeta('h4status'), next: s.h4.enabled ? new Date((Math.floor(now.getTime() / 14400000) + (now.getTime() % 14400000 >= (s.h4.delay_min ?? 5) * 60000 ? 1 : 0)) * 14400000 + (s.h4.delay_min ?? 5) * 60000).toISOString() : null },
     groups: db.listGroups().map((g) => ({
       id: g.id, name: g.name, close_time: g.close_time, timezone: g.timezone, enabled: !!g.enabled,
@@ -131,20 +262,20 @@ app.get('/api/history', wrap((req, res) => {
 
 // Dzwonek: te same zdarzenia, które trafiają do e-maili.
 app.get('/api/notifications', wrap((req, res) => {
-  const seen = Number(db.getMeta('bellSeen') || 0);
-  res.json({ seen, items: db.listAlerts(40).map((a) => {
+  const seen = db.getBellSeen(req.user.id);
+  res.json({ seen, items: db.listAlerts(40, req.user.id).map((a) => {
     let msg = {}; try { msg = JSON.parse(a.message); } catch { msg = { code: 'raw', params: { text: a.message } }; }
     return { id: a.id, ts: a.ts, type: a.type, severity: a.severity, instrument_id: a.instrument_id, unread: a.id > seen, ...msg };
   }) });
 }));
 app.post('/api/notifications/seen', wrap((req, res) => {
-  const top = db.listAlerts(1)[0]?.id || 0;
-  db.setMeta('bellSeen', Math.min(top, Math.max(Number(req.body?.id) || top, Number(db.getMeta('bellSeen') || 0))));
+  const top = db.listAlerts(1, req.user.id)[0]?.id || 0;
+  db.setBellSeen(req.user.id, Math.min(top, Math.max(Number(req.body?.id) || top, db.getBellSeen(req.user.id))));
   res.json({ ok: true });
 }));
 
 app.get('/api/alerts', wrap((req, res) => {
-  res.json(db.listAlerts(300).map((a) => {
+  res.json(db.listAlerts(300, req.user.id).map((a) => {
     let msg = {}; try { msg = JSON.parse(a.message); } catch { msg = { code: 'raw', params: { text: a.message } }; }
     return { id: a.id, ts: a.ts, type: a.type, severity: a.severity, instrument_id: a.instrument_id, ...msg };
   }));
@@ -153,7 +284,8 @@ app.get('/api/alerts', wrap((req, res) => {
 // ---------- ustawienia ----------
 app.get('/api/settings', wrap((req, res) => {
   res.json({
-    settings: publicSettings(),
+    settings: publicSettings(req.user),
+    loginBgs: LOGIN_BGS, appBgs: APP_BGS,
     providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, name: p.name, needsKey: p.needsKey })),
     classes: CLASSES,
   });
@@ -161,6 +293,16 @@ app.get('/api/settings', wrap((req, res) => {
 
 app.put('/api/settings', wrap((req, res) => {
   const patch = req.body || {};
+  // kapitał i limity ryzyka są osobiste; reszta to ustawienia serwera i wymaga administratora
+  const personal = {};
+  for (const k of db.PERSONAL_KEYS) if (patch[k]) { personal[k] = patch[k]; }
+  const globalKeys = Object.keys(patch).filter((k) => !db.PERSONAL_KEYS.includes(k));
+  if (globalKeys.length && req.user.role !== 'admin') throw Object.assign(new Error('err.adminOnly'), { status: 403 });
+  if (patch.appearance) {
+    if (patch.appearance.loginBg != null && !LOGIN_BGS.includes(patch.appearance.loginBg)) throw bad('err.background');
+    if (patch.appearance.appBg != null && !APP_BGS.includes(patch.appearance.appBg)) throw bad('err.background');
+  }
+  if (patch.risk) for (const k of ['maxTotal', 'maxCurrency', 'maxPosition']) if (patch.risk[k] != null) { const v = Number(patch.risk[k]); if (!(v > 0 && v <= 100)) throw bad('err.riskPct'); patch.risk[k] = v; }
   if (patch.smtp) {
     if (!patch.smtp.pass && !patch.smtp.clearPass) delete patch.smtp.pass;
     delete patch.smtp.passSet; delete patch.smtp.clearPass;
@@ -180,17 +322,19 @@ app.put('/api/settings', wrap((req, res) => {
     if (patch.capital.currency != null) patch.capital.currency = String(patch.capital.currency).trim().toUpperCase().slice(0, 6) || 'PLN';
     if (patch.capital.defaultRisk != null) { const v = Number(patch.capital.defaultRisk); if (!(v > 0 && v <= 100)) throw bad('err.riskPct'); patch.capital.defaultRisk = v; }
   }
-  db.saveSettings(patch);
+  for (const k of db.PERSONAL_KEYS) delete patch[k];
+  if (globalKeys.length) db.saveSettings(patch);
+  if (Object.keys(personal).length) db.saveUserSettings(req.user.id, personal);
   invalidate();
-  res.json({ settings: publicSettings() });
+  res.json({ settings: publicSettings(req.user) });
 }));
 
-app.post('/api/settings/test-smtp', wrap(async (req, res) => {
+app.post('/api/settings/test-smtp', admin, wrap(async (req, res) => {
   try { await sendTest(db.getSettings(), req.body?.lang); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 }));
 
-app.post('/api/providers/test', wrap(async (req, res) => {
+app.post('/api/providers/test', admin, wrap(async (req, res) => {
   const { provider, symbol } = req.body || {};
   const p = PROVIDERS[provider];
   if (!p) throw bad('err.provider');
@@ -217,14 +361,14 @@ function validGroup(b, partial = false) {
   return g;
 }
 app.get('/api/groups', wrap((req, res) => res.json(db.listGroups().map((g) => ({ ...g, enabled: !!g.enabled })))));
-app.post('/api/groups', wrap((req, res) => res.status(201).json(db.createGroup(validGroup(req.body || {})))));
-app.put('/api/groups/:id', wrap((req, res) => {
+app.post('/api/groups', admin, wrap((req, res) => res.status(201).json(db.createGroup(validGroup(req.body || {})))));
+app.put('/api/groups/:id', admin, wrap((req, res) => {
   const g = db.updateGroup(Number(req.params.id), validGroup(req.body || {}, true));
   if (!g) return res.status(404).json({ error: 'err.notFound' });
   invalidate();
   res.json(g);
 }));
-app.delete('/api/groups/:id', wrap((req, res) => {
+app.delete('/api/groups/:id', admin, wrap((req, res) => {
   try { db.deleteGroup(Number(req.params.id)); } catch (e) { throw bad(e.message); }
   res.json({ ok: true });
 }));
@@ -252,14 +396,14 @@ function validInstrument(b, existing) {
   return it;
 }
 app.get('/api/instruments', wrap((req, res) => res.json(db.listInstruments())));
-app.post('/api/instruments', wrap((req, res) => {
+app.post('/api/instruments', admin, wrap((req, res) => {
   const it = validInstrument(req.body || {});
   if (db.getInstrument(it.id)) throw bad('err.instExists');
   const saved = db.upsertInstrument(it);
   invalidate();
   res.status(201).json(saved);
 }));
-app.put('/api/instruments/:id', wrap((req, res) => {
+app.put('/api/instruments/:id', admin, wrap((req, res) => {
   const cur = db.getInstrument(req.params.id);
   if (!cur) return res.status(404).json({ error: 'err.notFound' });
   const saved = db.upsertInstrument(validInstrument(req.body || {}, cur));
@@ -267,7 +411,7 @@ app.put('/api/instruments/:id', wrap((req, res) => {
   res.json(saved);
 }));
 // Import wielu instrumentów naraz: linie „SYMBOL;Nazwa” (symbol źródła danych).
-app.post('/api/instruments/import', wrap((req, res) => {
+app.post('/api/instruments/import', admin, wrap((req, res) => {
   const b = req.body || {};
   const provider = PROVIDERS[b.provider] ? b.provider : db.getSettings().data.provider;
   const group_id = Number(b.group_id);
@@ -292,14 +436,14 @@ app.post('/api/instruments/import', wrap((req, res) => {
   invalidate();
   res.json({ added, skipped, invalid });
 }));
-app.post('/api/categories/toggle', wrap((req, res) => {
+app.post('/api/categories/toggle', admin, wrap((req, res) => {
   const { category, enabled } = req.body || {};
   if (!category) throw bad('err.category');
   const changed = db.setCategoryEnabled(String(category), !!enabled);
   invalidate();
   res.json({ changed });
 }));
-app.delete('/api/instruments/:id', wrap((req, res) => { db.deleteInstrument(req.params.id); invalidate(); res.json({ ok: true }); }));
+app.delete('/api/instruments/:id', admin, wrap((req, res) => { db.deleteInstrument(req.params.id); invalidate(); res.json({ ok: true }); }));
 
 // ---------- bieżąca cena ----------
 /** Cena z API; gdy źródło zawiedzie – ostatnie zamknięcie z bazy (oznaczone jako nieaktualne). */
@@ -333,15 +477,22 @@ function validPosition(b) {
   p.opened = b.opened || null; p.note = b.note ? String(b.note).slice(0, 300) : null;
   return p;
 }
-app.get('/api/positions', wrap((req, res) => res.json(db.listPositions())));
-const kickH4 = () => { if (!job.running) checkPositions({ trigger: 'manual' }).catch((e) => console.error('[h4]', e.message)); };
+app.get('/api/positions', wrap((req, res) => res.json(db.listPositions(req.user.id))));
+const kickH4 = (userId) => { if (!job.running) checkPositions({ trigger: 'manual', userId }).catch((e) => console.error('[h4]', e.message)); };
+/** Pozycja musi należeć do zalogowanego użytkownika. */
+function ownPosition(req) {
+  const pos = db.getPosition(req.params.id);
+  if (!pos || pos.user_id !== req.user.id) throw Object.assign(new Error('err.notFound'), { status: 404 });
+  return pos;
+}
 app.post('/api/positions/check', wrap((req, res) => {
   if (job.running) throw Object.assign(new Error('BUSY'), { status: 409 });
-  kickH4();
+  kickH4(req.user.id);
   res.status(202).json({ started: true });
 }));
 app.post('/api/positions', wrap(async (req, res) => {
   const p = validPosition({ ...req.body, id: undefined });
+  p.user_id = req.user.id;
   let quote = null;
   if (req.body?.market) {
     // wpis „po cenie rynkowej”: cenę wejścia pobieramy z API w chwili dodania
@@ -351,12 +502,11 @@ app.post('/api/positions', wrap(async (req, res) => {
     if (p.stop != null && (p.direction === 'LONG' ? p.stop >= p.entry : p.stop <= p.entry)) throw bad('err.stopSide');
   }
   const id = db.savePosition(p);
-  invalidate(); kickH4();
+  invalidate(); kickH4(req.user.id);
   res.status(201).json({ id, entry: p.entry, quote });
 }));
 app.post('/api/positions/:id/close', wrap(async (req, res) => {
-  const pos = db.getPosition(req.params.id);
-  if (!pos) return res.status(404).json({ error: 'err.notFound' });
+  const pos = ownPosition(req);
   const b = req.body || {};
   const numOrNull = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
   let exit = numOrNull(b.exit);
@@ -366,6 +516,7 @@ app.post('/api/positions/:id/close', wrap(async (req, res) => {
   const r = tradeR(pos.direction, pos.entry, stop0, exit);
   if (r == null && pnlManual == null) throw bad('err.closeNeedsResult');
   const tradeId = db.addTrade({
+    user_id: req.user.id,
     instrument_id: pos.instrument_id, direction: pos.direction, risk_pct: pos.risk_pct, entry: pos.entry, stop_initial: stop0, exit,
     opened: pos.opened, closed: b.closed || new Date().toISOString().slice(0, 10), r, pnl_manual: pnlManual, note: b.note ?? pos.note,
   });
@@ -374,13 +525,17 @@ app.post('/api/positions/:id/close', wrap(async (req, res) => {
   res.json({ tradeId, r, exit });
 }));
 app.get('/api/capital', wrap((req, res) => {
-  const s = db.getSettings();
-  const market = getMarket();
-  res.json({ capital: s.capital, ...buildLedger(db.listTrades(), s.capital.start), openRisk: market.portfolio.total, openPositions: market.portfolio.positions.length });
+  const s = db.getSettings(req.user.id);
+  const market = getMarket(req.user.id);
+  res.json({ capital: s.capital, ...buildLedger(db.listTrades(req.user.id), s.capital.start), openRisk: market.portfolio.total, openPositions: market.portfolio.positions.length });
 }));
-app.delete('/api/trades/:id', wrap((req, res) => { db.deleteTrade(Number(req.params.id)); res.json({ ok: true }); }));
-app.put('/api/positions/:id', wrap((req, res) => { db.savePosition(validPosition({ ...req.body, id: req.params.id })); invalidate(); res.json({ ok: true }); }));
-app.delete('/api/positions/:id', wrap((req, res) => { db.deletePosition(Number(req.params.id)); invalidate(); res.json({ ok: true }); }));
+app.delete('/api/trades/:id', wrap((req, res) => {
+  const t = db.getTrade(req.params.id);
+  if (!t || t.user_id !== req.user.id) return res.status(404).json({ error: 'err.notFound' });
+  db.deleteTrade(t.id); res.json({ ok: true });
+}));
+app.put('/api/positions/:id', wrap((req, res) => { ownPosition(req); db.savePosition(validPosition({ ...req.body, id: req.params.id })); invalidate(); res.json({ ok: true }); }));
+app.delete('/api/positions/:id', wrap((req, res) => { db.deletePosition(ownPosition(req).id); invalidate(); res.json({ ok: true }); }));
 
 // ---------- statyczne ----------
 app.use(express.static(path.join(ROOT, 'public'), { extensions: ['html'], maxAge: 0 }));

@@ -19,10 +19,16 @@ function transport(smtp) {
   });
 }
 
-async function send(settings, subject, html, text) {
+/** Czy da się wysłać cokolwiek (serwer i nadawca); odbiorcę można podać osobno. */
+export function smtpReady(s) {
+  return !!(s.smtp.host && (s.smtp.from || s.smtp.user));
+}
+
+async function send(settings, subject, html, text, to = null) {
   const s = settings.smtp;
-  if (!smtpConfigured(settings)) throw new Error('err.smtp');
-  await transport(s).sendMail({ from: s.from || s.user, to: s.to, subject, html, text });
+  const rcpt = to || s.to;
+  if (!smtpReady(settings) || !rcpt) throw new Error('err.smtp');
+  await transport(s).sendMail({ from: s.from || s.user, to: rcpt, subject, html, text });
 }
 
 export async function sendTest(settings, lang) {
@@ -136,5 +142,5 @@ export function buildPositionsReport({ results, changed, settings }) {
 
 export async function sendPositionsReport(ctx) {
   const { subject, html, text } = buildPositionsReport(ctx);
-  await send(ctx.settings, subject, html, text);
+  await send(ctx.settings, subject, html, text, ctx.to || null);
 }

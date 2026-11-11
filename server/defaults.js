@@ -232,6 +232,7 @@ export const DEFAULT_SETTINGS = {
   h4: { enabled: true, delay_min: 5 }, // analiza otwartych pozycji co 4 godziny
   risk: { maxTotal: 5, maxCurrency: 2.5, maxPosition: 1.5 },
   capital: { start: 0, currency: 'PLN', defaultRisk: 1 },
+  appearance: { loginBg: 'aurora', appBg: 'default' },
   notify: {
     mode: 'report',             // off | alerts | report
     minGrade: 'B',

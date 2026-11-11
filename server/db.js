@@ -89,6 +89,41 @@ export function openDb(file) {
   addColumn('positions', 'advice', 'TEXT');
   addColumn('positions', 'advice_at', 'TEXT');
   addColumn('positions', 'stop_initial', 'REAL');
+  addColumn('positions', 'user_id', 'INTEGER');
+  addColumn('alerts', 'user_id', 'INTEGER');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      pass_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'user',
+      email TEXT,
+      settings TEXT NOT NULL DEFAULT '{}',
+      bell_seen INTEGER NOT NULL DEFAULT 0,
+      created TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      created TEXT NOT NULL,
+      expires INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS portfolio_shares (
+      owner_id INTEGER NOT NULL,
+      viewer_id INTEGER NOT NULL,
+      PRIMARY KEY (owner_id, viewer_id)
+    );
+    CREATE TABLE IF NOT EXISTS messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      from_id INTEGER NOT NULL,
+      to_id INTEGER NOT NULL,
+      ts TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      trade TEXT,
+      read_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS messages_to ON messages (to_id, read_at);
+  `);
   db.exec(`
     UPDATE positions SET stop_initial = stop WHERE stop_initial IS NULL AND stop IS NOT NULL;
     CREATE TABLE IF NOT EXISTS trades (
@@ -102,6 +137,7 @@ export function openDb(file) {
       note TEXT
     );
   `);
+  addColumn('trades', 'user_id', 'INTEGER');
   seed();
   return db;
 }
@@ -158,11 +194,29 @@ function deepMerge(base, over) {
   return out;
 }
 
-export function getSettings() {
+/** Ustawienia osobiste użytkownika (kapitał, limity ryzyka) nakładane na globalne. */
+export const PERSONAL_KEYS = ['capital', 'risk'];
+
+export function getSettings(userId = null) {
   const rows = db.prepare('SELECT key, value FROM settings').all();
   const stored = {};
   for (const r of rows) { try { stored[r.key] = JSON.parse(r.value); } catch { /* ignoruj */ } }
-  return deepMerge(structuredClone(DEFAULT_SETTINGS), stored);
+  let merged = deepMerge(structuredClone(DEFAULT_SETTINGS), stored);
+  if (userId) {
+    const u = db.prepare('SELECT settings FROM users WHERE id = ?').get(userId);
+    const own = u ? safeJson(u.settings, {}) : {};
+    for (const k of PERSONAL_KEYS) if (own[k]) merged = deepMerge(merged, { [k]: own[k] });
+  }
+  return merged;
+}
+
+export function saveUserSettings(userId, patch) {
+  const u = db.prepare('SELECT settings FROM users WHERE id = ?').get(userId);
+  if (!u) return;
+  const cur = safeJson(u.settings, {});
+  const base = getSettings(userId);
+  for (const k of PERSONAL_KEYS) if (patch[k]) cur[k] = deepMerge(base[k], patch[k]);
+  db.prepare('UPDATE users SET settings = ? WHERE id = ?').run(JSON.stringify(cur), userId);
 }
 
 export function saveSettings(patch) {
@@ -269,12 +323,15 @@ export function saveH1(id, bars) {
 export const getH1 = (id) => db.prepare('SELECT ts, o, h, l, c FROM h1 WHERE instrument_id = ? ORDER BY ts').all(id);
 
 // ---------- pozycje ----------
-export const listPositions = () => db.prepare('SELECT * FROM positions ORDER BY id').all()
-  .map((p) => ({ ...p, advice: p.advice ? safeJson(p.advice, null) : null }));
+const parsePos = (p) => ({ ...p, advice: p.advice ? safeJson(p.advice, null) : null });
+/** Pozycje jednego użytkownika; bez argumentu – wszystkich (harmonogram H4). */
+export const listPositions = (userId = null) => (userId == null
+  ? db.prepare('SELECT * FROM positions ORDER BY id').all()
+  : db.prepare('SELECT * FROM positions WHERE user_id = ? ORDER BY id').all(userId)).map(parsePos);
 export function saveAdvice(id, advice) {
   db.prepare('UPDATE positions SET advice = ?, advice_at = ? WHERE id = ?').run(JSON.stringify(advice), new Date().toISOString(), id);
 }
-export const getPosition = (id) => listPositions().find((p) => p.id === Number(id)) || null;
+export const getPosition = (id) => { const p = db.prepare('SELECT * FROM positions WHERE id = ?').get(Number(id)); return p ? parsePos(p) : null; };
 export function savePosition(p) {
   if (p.id) {
     // stop początkowy (do liczenia wyniku w R) ustala się raz – przy pierwszym wpisaniu stopu
@@ -283,16 +340,17 @@ export function savePosition(p) {
       .run(p.instrument_id, p.direction, p.risk_pct, p.entry ?? null, p.stop ?? null, p.opened ?? null, p.note ?? null, p.stop ?? null, p.id);
     return p.id;
   }
-  return Number(db.prepare('INSERT INTO positions (instrument_id, direction, risk_pct, entry, stop, stop_initial, opened, note) VALUES (?,?,?,?,?,?,?,?)')
-    .run(p.instrument_id, p.direction, p.risk_pct, p.entry ?? null, p.stop ?? null, p.stop ?? null, p.opened ?? null, p.note ?? null).lastInsertRowid);
+  return Number(db.prepare('INSERT INTO positions (user_id, instrument_id, direction, risk_pct, entry, stop, stop_initial, opened, note) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(p.user_id ?? null, p.instrument_id, p.direction, p.risk_pct, p.entry ?? null, p.stop ?? null, p.stop ?? null, p.opened ?? null, p.note ?? null).lastInsertRowid);
 }
 export const deletePosition = (id) => db.prepare('DELETE FROM positions WHERE id = ?').run(id);
 
 // ---------- historia zagrań ----------
-export const listTrades = () => db.prepare('SELECT * FROM trades ORDER BY closed, id').all();
+export const listTrades = (userId) => db.prepare('SELECT * FROM trades WHERE user_id = ? ORDER BY closed, id').all(userId);
+export const getTrade = (id) => db.prepare('SELECT * FROM trades WHERE id = ?').get(Number(id)) || null;
 export function addTrade(t) {
-  return Number(db.prepare(`INSERT INTO trades (instrument_id, direction, risk_pct, entry, stop_initial, exit, opened, closed, r, pnl_manual, note)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(t.instrument_id, t.direction, t.risk_pct, t.entry ?? null, t.stop_initial ?? null, t.exit ?? null,
+  return Number(db.prepare(`INSERT INTO trades (user_id, instrument_id, direction, risk_pct, entry, stop_initial, exit, opened, closed, r, pnl_manual, note)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(t.user_id ?? null, t.instrument_id, t.direction, t.risk_pct, t.entry ?? null, t.stop_initial ?? null, t.exit ?? null,
     t.opened ?? null, t.closed, t.r ?? null, t.pnl_manual ?? null, t.note ?? null).lastInsertRowid);
 }
 export const deleteTrade = (id) => db.prepare('DELETE FROM trades WHERE id = ?').run(id);
@@ -310,10 +368,92 @@ export function lastSnapshot() {
 export const listSnapshots = (limit = 200) =>
   db.prepare('SELECT * FROM snapshots ORDER BY id DESC LIMIT ?').all(limit).map((r) => ({ ...r, summary: safeJson(r.summary, {}) }));
 export function saveAlerts(list) {
-  const ins = db.prepare('INSERT INTO alerts (ts, type, severity, instrument_id, message) VALUES (?,?,?,?,?)');
+  const ins = db.prepare('INSERT INTO alerts (ts, type, severity, instrument_id, message, user_id) VALUES (?,?,?,?,?,?)');
   const ts = new Date().toISOString();
-  for (const a of list) ins.run(ts, a.type, a.severity, a.instrument_id ?? null, a.message);
-  db.exec('DELETE FROM alerts WHERE id NOT IN (SELECT id FROM alerts ORDER BY id DESC LIMIT 2000)');
+  for (const a of list) ins.run(ts, a.type, a.severity, a.instrument_id ?? null, a.message, a.user_id ?? null);
+  db.exec('DELETE FROM alerts WHERE id NOT IN (SELECT id FROM alerts ORDER BY id DESC LIMIT 5000)');
 }
-export const countAlertsAfter = (id) => db.prepare('SELECT COUNT(*) n FROM alerts WHERE id > ?').get(id).n;
-export const listAlerts = (limit = 200) => db.prepare('SELECT * FROM alerts ORDER BY id DESC LIMIT ?').all(limit);
+// Alert bez właściciela dotyczy rynku i widzą go wszyscy; alert z właścicielem (pozycje) tylko on.
+export const countAlertsAfter = (id, userId) => db.prepare('SELECT COUNT(*) n FROM alerts WHERE id > ? AND (user_id IS NULL OR user_id = ?)').get(id, userId).n;
+export const listAlerts = (limit, userId) => db.prepare('SELECT * FROM alerts WHERE user_id IS NULL OR user_id = ? ORDER BY id DESC LIMIT ?').all(userId, limit);
+
+// ---------- użytkownicy i sesje ----------
+const pubUser = (u) => u && ({ id: u.id, username: u.username, role: u.role, email: u.email || '', created: u.created });
+export const countUsers = () => db.prepare('SELECT COUNT(*) n FROM users').get().n;
+export const countAdmins = () => db.prepare("SELECT COUNT(*) n FROM users WHERE role = 'admin'").get().n;
+export const listUsers = () => db.prepare('SELECT * FROM users ORDER BY username').all().map(pubUser);
+export const getUser = (id) => pubUser(db.prepare('SELECT * FROM users WHERE id = ?').get(Number(id)));
+export const getUserAuth = (username) => db.prepare('SELECT * FROM users WHERE username = ?').get(String(username));
+export const getUserAuthById = (id) => db.prepare('SELECT * FROM users WHERE id = ?').get(Number(id));
+export function createUser({ username, pass_hash, role, email }) {
+  const first = countUsers() === 0;
+  const id = Number(db.prepare('INSERT INTO users (username, pass_hash, role, email, created) VALUES (?,?,?,?,?)')
+    .run(username, pass_hash, role, email || null, new Date().toISOString()).lastInsertRowid);
+  // nowe konto nie dostaje zaległych powiadomień sprzed swojego utworzenia
+  if (!first) db.prepare('UPDATE users SET bell_seen = (SELECT COALESCE(MAX(id), 0) FROM alerts) WHERE id = ?').run(id);
+  if (first) {
+    // dane sprzed wprowadzenia kont (pozycje, zagrania, kapitał, limity) przechodzą na pierwszego administratora
+    db.prepare('UPDATE positions SET user_id = ? WHERE user_id IS NULL').run(id);
+    db.prepare('UPDATE trades SET user_id = ? WHERE user_id IS NULL').run(id);
+    const g = getSettings();
+    db.prepare('UPDATE users SET settings = ?, bell_seen = ? WHERE id = ?').run(JSON.stringify({ capital: g.capital, risk: g.risk }), Number(getMeta('bellSeen') || 0), id);
+  }
+  return getUser(id);
+}
+export function updateUser(id, { role, email, pass_hash }) {
+  if (role != null) db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, id);
+  if (email !== undefined) db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email || null, id);
+  if (pass_hash) { db.prepare('UPDATE users SET pass_hash = ? WHERE id = ?').run(pass_hash, id); db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id); }
+  return getUser(id);
+}
+export function deleteUser(id) {
+  for (const t of ['positions', 'trades']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(id);
+  db.prepare('DELETE FROM alerts WHERE user_id = ?').run(id);
+  db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id);
+  db.prepare('DELETE FROM portfolio_shares WHERE owner_id = ? OR viewer_id = ?').run(id, id);
+  db.prepare('DELETE FROM messages WHERE from_id = ? OR to_id = ?').run(id, id);
+  db.prepare('DELETE FROM users WHERE id = ?').run(id);
+}
+export const getBellSeen = (userId) => db.prepare('SELECT bell_seen FROM users WHERE id = ?').get(userId)?.bell_seen || 0;
+export const setBellSeen = (userId, v) => db.prepare('UPDATE users SET bell_seen = ? WHERE id = ?').run(v, userId);
+
+export function createSession(tokenHash, userId, ttlMs) {
+  db.prepare('DELETE FROM auth_sessions WHERE expires < ?').run(Date.now());
+  db.prepare('INSERT INTO auth_sessions (token_hash, user_id, created, expires) VALUES (?,?,?,?)').run(tokenHash, userId, new Date().toISOString(), Date.now() + ttlMs);
+}
+export function sessionUser(tokenHash) {
+  const r = db.prepare('SELECT user_id, expires FROM auth_sessions WHERE token_hash = ?').get(tokenHash);
+  if (!r || r.expires < Date.now()) return null;
+  return getUser(r.user_id);
+}
+export const deleteSession = (tokenHash) => db.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').run(tokenHash);
+
+// ---------- udostępnianie portfela ----------
+export const sharesOf = (ownerId) => db.prepare('SELECT viewer_id FROM portfolio_shares WHERE owner_id = ?').all(ownerId).map((r) => r.viewer_id);
+export const sharedWith = (viewerId) => db.prepare('SELECT u.id, u.username FROM portfolio_shares s JOIN users u ON u.id = s.owner_id WHERE s.viewer_id = ? ORDER BY u.username').all(viewerId);
+export const canView = (ownerId, viewerId) => ownerId === viewerId || !!db.prepare('SELECT 1 FROM portfolio_shares WHERE owner_id = ? AND viewer_id = ?').get(ownerId, viewerId);
+export function setShares(ownerId, viewerIds) {
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM portfolio_shares WHERE owner_id = ?').run(ownerId);
+    const ins = db.prepare('INSERT OR IGNORE INTO portfolio_shares (owner_id, viewer_id) VALUES (?,?)');
+    for (const v of viewerIds) if (v !== ownerId && getUser(v)) ins.run(ownerId, v);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+}
+
+// ---------- wiadomości ----------
+const parseMsg = (m) => ({ ...m, trade: m.trade ? safeJson(m.trade, null) : null });
+export function addMessage({ from_id, to_id, body, trade }) {
+  return Number(db.prepare('INSERT INTO messages (from_id, to_id, ts, body, trade) VALUES (?,?,?,?,?)')
+    .run(from_id, to_id, new Date().toISOString(), body || '', trade ? JSON.stringify(trade) : null).lastInsertRowid);
+}
+export const unreadMessages = (userId) => db.prepare('SELECT COUNT(*) n FROM messages WHERE to_id = ? AND read_at IS NULL').get(userId).n;
+export const thread = (a, b) => db.prepare('SELECT * FROM messages WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?) ORDER BY id DESC LIMIT 200').all(a, b, b, a).reverse().map(parseMsg);
+export const markThreadRead = (me, other) => db.prepare('UPDATE messages SET read_at = ? WHERE to_id = ? AND from_id = ? AND read_at IS NULL').run(new Date().toISOString(), me, other);
+export function threadSummaries(me) {
+  const rows = db.prepare(`SELECT CASE WHEN from_id = ? THEN to_id ELSE from_id END other, MAX(id) last_id,
+    SUM(CASE WHEN to_id = ? AND read_at IS NULL THEN 1 ELSE 0 END) unread
+    FROM messages WHERE from_id = ? OR to_id = ? GROUP BY other`).all(me, me, me, me);
+  return rows.map((r) => ({ other: r.other, unread: r.unread, last: parseMsg(db.prepare('SELECT * FROM messages WHERE id = ?').get(r.last_id)) }));
+}

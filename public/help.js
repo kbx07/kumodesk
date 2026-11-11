@@ -126,13 +126,26 @@ const pl = [
     'Brakujące instrumenty dodasz przyciskiem **Importuj listę**: wklejasz symbole (jeden w linii, opcjonalnie z nazwą po średniku), wybierasz kategorię i grupę czasową. Każdy aktywny instrument to jedno zapytanie przy odświeżaniu, więc włączaj tylko to, co faktycznie grasz.',
     'Kryptowaluty mają własną grupę czasową: handel trwa całą dobę, więc świeca dzienna zamyka się o północy UTC, także w weekendy.',
   ] },
+  { id: 'accounts', title: 'Logowanie, użytkownicy, udostępnianie i wiadomości', body: [
+    'Przy **pierwszym uruchomieniu** aplikacja prosi o utworzenie konta administratora. Tym loginem i hasłem logujesz się później. Hasła są przechowywane wyłącznie jako skrót, a sesja trwa 30 dni.',
+    [
+      '**Administrator** zarządza kontami (**Ustawienia → Użytkownicy**) i ustawieniami serwera: danymi, instrumentami, grupami czasowymi, SMTP i wyglądem. Administratorów może być wielu.',
+      '**Użytkownik** korzysta z analizy i prowadzi własny portfel, ale nie zmienia ustawień serwera.',
+      '**Każde konto ma własne**: otwarte pozycje, historię zagrań, kapitał, limity ryzyka, powiadomienia o pozycjach i wiadomości. Analiza rynku jest wspólna.',
+    ],
+    '**Udostępnianie portfela:** w zakładce Portfel zaznacz „Udostępnij mój portfel” i wybierz osoby. Zobaczą Twoje otwarte pozycje, wyniki i wszystkie zagrania – tylko do odczytu. Odznaczenie natychmiast odbiera dostęp.',
+    '**Udostępnianie pojedynczego zagrania:** w **Ustawienia → Kapitał**, na końcu wiersza zagrania, kliknij ikonę udostępniania, wybierz osobę i dopisz wiadomość. Odbiorca dostaje kartę zagrania w wiadomościach.',
+    '**Wiadomości:** koperta obok dzwonka otwiera rozmowy z innymi użytkownikami; liczba przy kopercie to nieprzeczytane wiadomości.',
+    '**Moje konto** (menu z Twoim loginem lub Ustawienia → Ogólne): adres e-mail do powiadomień o pozycjach i zmiana hasła. Zmiana hasła wylogowuje pozostałe urządzenia.',
+    'Zapomniane hasło resetuje administrator w managerze użytkowników. Jeśli nie ma dostępu żaden administrator, hasło zmienia się z wiersza poleceń serwera – opis jest w README.',
+  ] },
   { id: 'limits', title: 'Ograniczenia, o których warto pamiętać', body: [
     [
       'Yahoo Finance to źródło nieoficjalne: może przestać działać lub zwrócić błędne dane. Przy podejrzanych świecach porównaj z wykresem brokera.',
       'Świeca dzienna walut z Yahoo kończy się o północy czasu londyńskiego, nie o 17:00 w Nowym Jorku.',
       'Metale to kontrakty terminowe (np. złoto GC=F), nie ceny spot.',
       'Ceny w aplikacji mogą różnić się od cen u Twojego brokera.',
-      'Aplikacja nie ma logowania – trzymaj ją w sieci lokalnej albo za proxy z hasłem.',
+      'Aplikacja ma własne logowanie, ale ruch nie jest szyfrowany – poza siecią lokalną wystawiaj ją tylko przez proxy z HTTPS.',
     ],
   ] },
 ];
@@ -262,13 +275,26 @@ const en = [
     'Add missing instruments with **Import a list**: paste symbols (one per line, optionally with a name after a semicolon), choose a category and a time group. Every active instrument costs one request per refresh, so enable only what you actually trade.',
     'Cryptocurrencies have their own time group: they trade around the clock, so the daily candle closes at midnight UTC, weekends included.',
   ] },
+  { id: 'accounts', title: 'Signing in, users, sharing and messages', body: [
+    'On the **first launch** the app asks you to create the administrator account. You sign in with that username and password afterwards. Passwords are stored only as a hash and a session lasts 30 days.',
+    [
+      'An **administrator** manages accounts (**Settings → Users**) and server settings: data, instruments, time groups, SMTP and appearance. There can be several administrators.',
+      'A **user** uses the analysis and keeps their own portfolio but cannot change server settings.',
+      '**Every account has its own**: open positions, trade history, capital, risk limits, position notifications and messages. The market analysis is shared.',
+    ],
+    '**Sharing a portfolio:** on the Portfolio page tick “Share my portfolio” and choose people. They see your open positions, results and all trades – read-only. Unticking removes access immediately.',
+    '**Sharing a single trade:** in **Settings → Capital**, at the end of a trade row, click the share icon, choose a person and add a message. The recipient gets the trade card in their messages.',
+    '**Messages:** the envelope next to the bell opens conversations with other users; the number on the envelope counts unread messages.',
+    '**My account** (the menu with your username, or Settings → General): the e-mail address for position notifications and the password change. Changing the password signs out your other devices.',
+    'A forgotten password is reset by an administrator in the user manager. If no administrator can sign in, the password is changed from the server command line – see the README.',
+  ] },
   { id: 'limits', title: 'Limitations worth remembering', body: [
     [
       'Yahoo Finance is an unofficial source: it may stop working or return wrong data. If candles look suspicious, compare them with your broker\'s chart.',
       'Yahoo\'s daily currency candle ends at midnight London time, not at 17:00 New York.',
       'Metals are futures contracts (e.g. gold GC=F), not spot prices.',
       'Prices in the app may differ from prices at your broker.',
-      'The app has no login – keep it on your local network or behind a password-protected proxy.',
+      'The app has its own sign-in, but traffic is not encrypted – outside your local network expose it only through a proxy with HTTPS.',
     ],
   ] },
 ];
@@ -398,13 +424,26 @@ const de = [
     'Fehlende Instrumente fügen Sie über **Liste importieren** hinzu: Symbole einfügen (eines je Zeile, optional mit Namen nach einem Semikolon), Kategorie und Zeitgruppe wählen. Jedes aktive Instrument kostet eine Anfrage je Aktualisierung – aktivieren Sie nur, was Sie tatsächlich handeln.',
     'Kryptowährungen haben eine eigene Zeitgruppe: Sie werden rund um die Uhr gehandelt, daher schließt die Tageskerze um Mitternacht UTC, auch am Wochenende.',
   ] },
+  { id: 'accounts', title: 'Anmeldung, Benutzer, Teilen und Nachrichten', body: [
+    'Beim **ersten Start** fordert die App Sie auf, das Administratorkonto anzulegen. Mit diesem Benutzernamen und Passwort melden Sie sich später an. Passwörter werden nur als Hash gespeichert, eine Sitzung gilt 30 Tage.',
+    [
+      'Ein **Administrator** verwaltet Konten (**Einstellungen → Benutzer**) und Servereinstellungen: Daten, Instrumente, Zeitgruppen, SMTP und Aussehen. Es kann mehrere Administratoren geben.',
+      'Ein **Benutzer** nutzt die Analyse und führt ein eigenes Portfolio, kann aber keine Servereinstellungen ändern.',
+      '**Jedes Konto hat eigene**: offene Positionen, Trade-Historie, Kapital, Risikolimits, Positionsbenachrichtigungen und Nachrichten. Die Marktanalyse ist gemeinsam.',
+    ],
+    '**Portfolio teilen:** Auf der Portfolio-Seite „Mein Portfolio teilen“ ankreuzen und Personen wählen. Sie sehen Ihre offenen Positionen, Ergebnisse und alle Trades – nur lesend. Das Entfernen des Hakens entzieht den Zugriff sofort.',
+    '**Einzelnen Trade teilen:** Unter **Einstellungen → Kapital** am Ende einer Trade-Zeile auf das Teilen-Symbol klicken, Person wählen und eine Nachricht ergänzen. Der Empfänger erhält die Trade-Karte in seinen Nachrichten.',
+    '**Nachrichten:** Der Umschlag neben der Glocke öffnet Unterhaltungen mit anderen Benutzern; die Zahl am Umschlag zeigt ungelesene Nachrichten.',
+    '**Mein Konto** (Menü mit Ihrem Benutzernamen oder Einstellungen → Allgemein): E-Mail-Adresse für Positionsbenachrichtigungen und Passwortänderung. Eine Passwortänderung meldet Ihre anderen Geräte ab.',
+    'Ein vergessenes Passwort setzt ein Administrator in der Benutzerverwaltung zurück. Kann sich kein Administrator anmelden, wird das Passwort über die Kommandozeile des Servers geändert – siehe README.',
+  ] },
   { id: 'limits', title: 'Einschränkungen, die man kennen sollte', body: [
     [
       'Yahoo Finance ist eine inoffizielle Quelle: Sie kann ausfallen oder falsche Daten liefern. Bei verdächtigen Kerzen mit dem Chart Ihres Brokers vergleichen.',
       'Die Tageskerze für Währungen bei Yahoo endet um Mitternacht Londoner Zeit, nicht um 17:00 Uhr in New York.',
       'Metalle sind Terminkontrakte (z. B. Gold GC=F), keine Spotpreise.',
       'Kurse in der App können von den Kursen Ihres Brokers abweichen.',
-      'Die App hat keine Anmeldung – betreiben Sie sie im lokalen Netz oder hinter einem passwortgeschützten Proxy.',
+      'Die App hat eine eigene Anmeldung, aber der Verkehr ist nicht verschlüsselt – außerhalb des lokalen Netzes nur über einen Proxy mit HTTPS bereitstellen.',
     ],
   ] },
 ];
