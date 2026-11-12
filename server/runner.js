@@ -20,7 +20,7 @@ export function getMarket(userId = null) {
   const key = userId || 0, now = Date.now();
   const hit = cache.get(key);
   if (hit && now - hit.at < 60000) return hit.market;
-  const instruments = db.listInstruments();
+  const instruments = db.listInstruments(userId); // the user's own set; without a user: everything in use
   const settings = db.getSettings(userId);
   const candlesById = {};
   for (const i of instruments) if (i.enabled) candlesById[i.id] = db.getCandles(i.id);
@@ -82,32 +82,43 @@ export async function refresh({ groupId = null, trigger = 'manual' } = {}) {
       job.done++;
     }
     invalidate();
-    const market = getMarket();
-    const summary = summarize(market);
-    const prev = db.lastSnapshot();
-    const alerts = diffAlerts(prev?.summary, summary, { minGrade: settings.notify.minGrade, groupId });
-    db.saveSnapshot({ trigger: trigger === 'schedule' ? `schedule:${group?.name || ''}` : 'manual', group_id: groupId, matrix_score: market.matrix.score, regime: market.regime.state, exec_state: market.exec, summary });
-    // "analysis ready" notification – the counterpart of the e-mail report after a group analysis
-    const done = [];
-    if (trigger === 'schedule' && fetched > 0) {
-      const plays = market.ranking.map((id) => market.instruments.find((x) => x.id === id)).filter((x) => x && x.action === 'PLAY' && (groupId == null || x.group_id === groupId));
-      done.push({ type: 'ANALYSIS', severity: plays.length ? 'MED' : 'LOW', instrument_id: plays[0]?.id ?? null,
-        code: plays.length ? 'alert.analysis' : 'alert.analysisNone',
-        params: { group: group?.name || '', exec: market.exec, matrix: market.matrix.score, n: plays.length, top: plays.slice(0, 3).map((x) => `${x.id} ${x.dir}`).join(', ') } });
-    }
-    const toSave = [...done, ...alerts];
-    if (toSave.length) db.saveAlerts(toSave.map((a) => ({ ...a, message: JSON.stringify({ code: a.code, params: a.params }) })));
-    if (trigger === 'schedule') pushAlerts(toSave);
-
-    let mail = null;
+    // Every user has their own instruments and portfolio, so the picture, alerts and report are per user.
+    let alertCount = 0;
+    const mails = [];
     const mode = settings.notify.mode;
-    if (trigger === 'schedule' && fetched > 0 && smtpConfigured(settings) && (mode === 'report' || (mode === 'alerts' && alerts.length))) {
-      try { await sendReport({ market, alerts, group, settings, errors: job.errors, users: db.listUsers() }); mail = 'sent'; db.addLog({ category: 'notify', code: 'notify.mail', params: { kind: 'report', to: settings.smtp.to } }); }
-      catch (e) { mail = `error: ${e.message}`; console.error('[mail]', e.message); db.addLog({ category: 'notify', level: 'error', code: 'notify.mailError', params: { error: e.message.slice(0, 200) } }); }
+    for (const u of db.listUsers()) {
+      if (groupId != null && !db.listInstruments(u.id).some((i) => i.enabled && i.group_id === groupId)) continue; // nothing of theirs in this group
+      const market = getMarket(u.id);
+      const summary = summarize(market);
+      const prev = db.lastSnapshot(u.id);
+      const alerts = diffAlerts(prev?.summary, summary, { minGrade: settings.notify.minGrade, groupId });
+      alertCount += alerts.length;
+      db.saveSnapshot({ trigger: trigger === 'schedule' ? `schedule:${group?.name || ''}` : 'manual', group_id: groupId, matrix_score: market.matrix.score, regime: market.regime.state, exec_state: market.exec, summary, user_id: u.id });
+      // "analysis ready" notification – the counterpart of the e-mail report after a group analysis
+      const done = [];
+      if (trigger === 'schedule' && fetched > 0) {
+        const plays = market.ranking.map((id) => market.instruments.find((x) => x.id === id)).filter((x) => x && x.action === 'PLAY' && (groupId == null || x.group_id === groupId));
+        done.push({ type: 'ANALYSIS', severity: plays.length ? 'MED' : 'LOW', instrument_id: plays[0]?.id ?? null,
+          code: plays.length ? 'alert.analysis' : 'alert.analysisNone',
+          params: { group: group?.name || '', exec: market.exec, matrix: market.matrix.score, n: plays.length, top: plays.slice(0, 3).map((x) => `${x.id} ${x.dir}`).join(', ') } });
+      }
+      const toSave = [...done, ...alerts].map((a) => ({ ...a, user_id: u.id }));
+      if (toSave.length) db.saveAlerts(toSave.map((a) => ({ ...a, message: JSON.stringify({ code: a.code, params: a.params }) })));
+      if (trigger === 'schedule') pushAlerts(toSave);
+      // report to the user's own address; an administrator without one gets it at the general recipients
+      const own = u.email || null;
+      const canSend = own ? smtpReady(settings) : (u.role === 'admin' && smtpConfigured(settings));
+      if (trigger === 'schedule' && fetched > 0 && canSend && (mode === 'report' || (mode === 'alerts' && alerts.length))) {
+        try {
+          await sendReport({ market, alerts, group, settings, errors: job.errors, users: db.listUsers(), ...(own ? { to: own, lang: u.lang } : {}) });
+          mails.push('sent'); db.addLog({ user_id: u.id, category: 'notify', code: 'notify.mail', params: { kind: 'report', to: own || settings.smtp.to } });
+        } catch (e) { mails.push(`error: ${e.message}`); console.error('[mail]', e.message); db.addLog({ user_id: u.id, category: 'notify', level: 'error', code: 'notify.mailError', params: { error: e.message.slice(0, 200) } }); }
+      }
     }
+    const mail = mails.length ? mails.join(',') : null;
     updateSignals().then(() => invalidate()).catch((e) => console.error('[signals]', e.message));
-    db.addLog({ category: 'system', level: job.errors.length ? 'warn' : 'info', code: 'system.groupRun', params: { group: group?.name || '*', trigger, fetched, total: list.length, errors: job.errors.length, alerts: alerts.length } });
-    return { ok: fetched > 0 || list.length === 0, fetched, total: list.length, errors: job.errors, alerts: alerts.length, mail };
+    db.addLog({ category: 'system', level: job.errors.length ? 'warn' : 'info', code: 'system.groupRun', params: { group: group?.name || '*', trigger, fetched, total: list.length, errors: job.errors.length, alerts: alertCount } });
+    return { ok: fetched > 0 || list.length === 0, fetched, total: list.length, errors: job.errors, alerts: alertCount, mail };
   } finally {
     Object.assign(job, { running: false, current: null, finishedAt: new Date().toISOString() });
   }

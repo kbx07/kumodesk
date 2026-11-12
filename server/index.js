@@ -588,7 +588,7 @@ app.post('/api/refresh', wrap((req, res) => {
 }));
 
 app.get('/api/history', wrap((req, res) => {
-  res.json(db.listSnapshots(300).map((s) => ({
+  res.json(db.listSnapshots(300, req.user.id).map((s) => ({
     id: s.id, ts: s.ts, trigger: s.trigger, matrix: s.matrix_score, regime: s.regime, exec: s.exec_state,
     primary: s.summary.primary, primaryDir: s.summary.grades?.[s.summary.primary]?.d ?? null,
     mood: s.summary.mood, portfolio: s.summary.portfolio,
@@ -739,23 +739,38 @@ function validInstrument(b, existing) {
   it.symbols = sym;
   return it;
 }
-app.get('/api/instruments', wrap((req, res) => res.json(db.listInstruments())));
-app.post('/api/instruments', admin, wrap((req, res) => {
+// Instruments: one shared catalogue; every user switches their own set on and off and may add to the catalogue.
+// Editing and deleting an entry is for its creator and for administrators.
+const MAX_OWN_INSTRUMENTS = 500;
+const canEditInst = (req, inst) => req.user.role === 'admin' || (inst.owner_id != null && inst.owner_id === req.user.id);
+const ownLimit = (req, adding = 1) => { if (req.user.role !== 'admin' && db.countOwnInstruments(req.user.id) + adding > MAX_OWN_INSTRUMENTS) throw bad('err.instLimit'); };
+const instFor = (req) => db.listInstruments(req.user.id).map((i) => ({ ...i, canEdit: canEditInst(req, i) }));
+app.get('/api/instruments', wrap((req, res) => res.json(instFor(req))));
+app.post('/api/instruments', wrap((req, res) => {
   const it = validInstrument(req.body || {});
   if (db.getInstrument(it.id)) throw bad('err.instExists');
-  const saved = db.upsertInstrument(it);
+  ownLimit(req);
+  // new entries are off for everybody else; the creator's choice is stored as their own switch
+  db.upsertInstrument({ ...it, enabled: false, owner_id: req.user.role === 'admin' ? null : req.user.id });
+  db.setUserInstrument(req.user.id, it.id, it.enabled);
   invalidate();
-  res.status(201).json(saved);
+  res.status(201).json(instFor(req).find((i) => i.id === it.id));
 }));
-app.put('/api/instruments/:id', admin, wrap((req, res) => {
+app.put('/api/instruments/:id', wrap((req, res) => {
   const cur = db.getInstrument(req.params.id);
   if (!cur) return res.status(404).json({ error: 'err.notFound' });
-  const saved = db.upsertInstrument(validInstrument(req.body || {}, cur));
+  const b = req.body || {};
+  const onlySwitch = Object.keys(b).every((k) => k === 'enabled');
+  if (!onlySwitch) {
+    if (!canEditInst(req, cur)) return res.status(403).json({ error: 'err.instNotYours' });
+    db.upsertInstrument({ ...validInstrument(b, cur), enabled: cur.enabled, owner_id: cur.owner_id });
+  }
+  if (b.enabled != null) db.setUserInstrument(req.user.id, cur.id, !!b.enabled);
   invalidate();
-  res.json(saved);
+  res.json(instFor(req).find((i) => i.id === cur.id));
 }));
 // Bulk import of instruments: lines "SYMBOL;Name" (data-source symbol).
-app.post('/api/instruments/import', admin, wrap((req, res) => {
+app.post('/api/instruments/import', wrap((req, res) => {
   const b = req.body || {};
   const provider = PROVIDERS[b.provider] ? b.provider : db.getSettings().data.provider;
   const group_id = Number(b.group_id);
@@ -774,22 +789,30 @@ app.post('/api/instruments/import', admin, wrap((req, res) => {
     const id = symbol.toUpperCase().replace(/[\^=]/g, '');
     if (!/^[A-Za-z0-9.^=_-]{1,24}$/.test(symbol) || !/^[A-Z0-9._-]{1,20}$/.test(id)) { invalid.push(line.slice(0, 30)); continue; }
     if (db.getInstrument(id)) { skipped++; continue; }
-    db.upsertInstrument({ id, name: rest.join(' ').trim() || symbol, class: cls, category, group_id, enabled: b.enabled !== false, symbols: { [provider]: symbol } });
+    ownLimit(req);
+    db.upsertInstrument({ id, name: rest.join(' ').trim() || symbol, class: cls, category, group_id, enabled: false, owner_id: req.user.role === 'admin' ? null : req.user.id, symbols: { [provider]: symbol } });
+    db.setUserInstrument(req.user.id, id, b.enabled !== false);
     added++;
   }
   invalidate();
   log(req, 'admin', 'admin.import', { added, category });
   res.json({ added, skipped, invalid });
 }));
-app.post('/api/categories/toggle', admin, wrap((req, res) => {
+app.post('/api/categories/toggle', wrap((req, res) => {
   const { category, enabled } = req.body || {};
   if (!category) throw bad('err.category');
-  const changed = db.setCategoryEnabled(String(category), !!enabled);
+  const changed = db.setUserCategory(req.user.id, String(category), !!enabled);
   log(req, 'admin', 'admin.category', { category: String(category), enabled: !!enabled });
   invalidate();
   res.json({ changed });
 }));
-app.delete('/api/instruments/:id', admin, wrap((req, res) => { db.deleteInstrument(req.params.id); invalidate(); res.json({ ok: true }); }));
+app.delete('/api/instruments/:id', wrap((req, res) => {
+  const cur = db.getInstrument(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'err.notFound' });
+  if (!canEditInst(req, cur)) return res.status(403).json({ error: 'err.instNotYours' });
+  if (req.user.role !== 'admin' && db.positionsOfOthers(cur.id, req.user.id)) throw bad('err.instInUse'); // someone else holds a position in it
+  db.deleteInstrument(cur.id); invalidate(); res.json({ ok: true });
+}));
 
 // ---------- current price ----------
 /** Price from the API; if the source fails – the last close from the database (marked as stale). */

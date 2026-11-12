@@ -166,6 +166,10 @@ export function openDb(file) {
   addColumn('users', 'totp_nagged', 'INTEGER NOT NULL DEFAULT 0');
   // interface language (used for e-mails) and pending invitations
   addColumn('users', 'lang', 'TEXT');
+  // every user has their own set of instruments: a per-user on/off choice over the shared catalogue
+  addColumn('instruments', 'owner_id', 'INTEGER');
+  addColumn('snapshots', 'user_id', 'INTEGER');
+  db.exec('CREATE TABLE IF NOT EXISTS user_instruments (user_id INTEGER NOT NULL, instrument_id TEXT NOT NULL, enabled INTEGER NOT NULL, PRIMARY KEY (user_id, instrument_id))');
   db.exec('CREATE TABLE IF NOT EXISTS invites (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL)');
   addColumn('users', 'recovery', "TEXT NOT NULL DEFAULT '[]'");
   db.exec(`
@@ -319,17 +323,40 @@ export function markGroupRun(id, date, status) {
 // ---------- instruments ----------
 const parseInst = (r) => r && ({ ...r, enabled: !!r.enabled, symbols: safeJson(r.symbols, {}) });
 const safeJson = (s, d) => { try { return JSON.parse(s); } catch { return d; } };
-export const listInstruments = () => db.prepare('SELECT * FROM instruments ORDER BY sort, id').all().map(parseInst);
+/**
+ * The instrument catalogue. With a user: `enabled` is that user's choice (their own switch, or the catalogue
+ * default when they have not chosen). Without: `enabled` means "used by at least one user" – what must be downloaded.
+ */
+export function listInstruments(userId = null) {
+  const rows = userId
+    ? db.prepare(`SELECT i.*, COALESCE(ui.enabled, i.enabled) AS enabled FROM instruments i
+        LEFT JOIN user_instruments ui ON ui.instrument_id = i.id AND ui.user_id = ? ORDER BY i.sort, i.id`).all(userId)
+    : db.prepare(`SELECT i.*, CASE WHEN (SELECT COUNT(*) FROM users) = 0 THEN i.enabled ELSE EXISTS(
+          SELECT 1 FROM users u LEFT JOIN user_instruments ui ON ui.user_id = u.id AND ui.instrument_id = i.id
+          WHERE COALESCE(ui.enabled, i.enabled) = 1) END AS enabled FROM instruments i ORDER BY i.sort, i.id`).all();
+  return rows.map(parseInst);
+}
+export function setUserInstrument(userId, id, enabled) {
+  db.prepare(`INSERT INTO user_instruments (user_id, instrument_id, enabled) VALUES (?,?,?)
+    ON CONFLICT(user_id, instrument_id) DO UPDATE SET enabled = excluded.enabled`).run(userId, id, enabled ? 1 : 0);
+}
+export function setUserCategory(userId, category, enabled) {
+  const ids = db.prepare('SELECT id FROM instruments WHERE category = ?').all(category);
+  for (const r of ids) setUserInstrument(userId, r.id, enabled);
+  return ids.length;
+}
+export const countOwnInstruments = (userId) => db.prepare('SELECT COUNT(*) n FROM instruments WHERE owner_id = ?').get(userId).n;
+export const positionsOfOthers = (id, userId) => db.prepare('SELECT COUNT(*) n FROM positions WHERE instrument_id = ? AND user_id != ?').get(id, userId).n;
 export const getInstrument = (id) => parseInst(db.prepare('SELECT * FROM instruments WHERE id = ?').get(id));
 export function upsertInstrument(it) {
   const cur = getInstrument(it.id);
   const n = { class: 'other', enabled: true, symbols: {}, sort: cur ? cur.sort : 1000, ...cur, ...it };
-  db.prepare(`INSERT INTO instruments (id, name, class, category, base, quote, group_id, enabled, provider, symbols, sort)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+  db.prepare(`INSERT INTO instruments (id, name, class, category, base, quote, group_id, enabled, provider, symbols, sort, owner_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET name=excluded.name, class=excluded.class, category=excluded.category, base=excluded.base, quote=excluded.quote,
       group_id=excluded.group_id, enabled=excluded.enabled, provider=excluded.provider, symbols=excluded.symbols, sort=excluded.sort`)
     .run(n.id, n.name, n.class, n.category || n.class || 'other', n.base || null, n.quote || null, n.group_id ?? null, n.enabled ? 1 : 0,
-      n.provider || null, JSON.stringify(n.symbols || {}), n.sort);
+      n.provider || null, JSON.stringify(n.symbols || {}), n.sort, n.owner_id ?? null);
   return getInstrument(n.id);
 }
 export function setCategoryEnabled(category, enabled) {
@@ -340,6 +367,7 @@ export function deleteInstrument(id) {
   db.prepare('DELETE FROM h4 WHERE instrument_id = ?').run(id);
   db.prepare('DELETE FROM h1 WHERE instrument_id = ?').run(id);
   db.prepare('DELETE FROM positions WHERE instrument_id = ?').run(id);
+  db.prepare('DELETE FROM user_instruments WHERE instrument_id = ?').run(id);
   db.prepare('DELETE FROM instruments WHERE id = ?').run(id);
 }
 export function markFetch(id, error) {
@@ -421,16 +449,17 @@ export const deleteTrade = (id) => db.prepare('DELETE FROM trades WHERE id = ?')
 
 // ---------- snapshots and alerts ----------
 export function saveSnapshot(s) {
-  db.prepare('INSERT INTO snapshots (ts, trigger, group_id, matrix_score, regime, exec_state, summary) VALUES (?,?,?,?,?,?,?)')
-    .run(new Date().toISOString(), s.trigger, s.group_id ?? null, s.matrix_score, s.regime, s.exec_state, JSON.stringify(s.summary));
-  db.exec('DELETE FROM snapshots WHERE id NOT IN (SELECT id FROM snapshots ORDER BY id DESC LIMIT 2000)');
+  db.prepare('INSERT INTO snapshots (ts, trigger, group_id, matrix_score, regime, exec_state, summary, user_id) VALUES (?,?,?,?,?,?,?,?)')
+    .run(new Date().toISOString(), s.trigger, s.group_id ?? null, s.matrix_score, s.regime, s.exec_state, JSON.stringify(s.summary), s.user_id ?? null);
+  db.exec('DELETE FROM snapshots WHERE id NOT IN (SELECT id FROM snapshots ORDER BY id DESC LIMIT 20000)');
 }
-export function lastSnapshot() {
-  const r = db.prepare('SELECT * FROM snapshots ORDER BY id DESC LIMIT 1').get();
+// Snapshots are per user; ones from before that (no owner) count for everyone.
+export function lastSnapshot(userId = null) {
+  const r = db.prepare('SELECT * FROM snapshots WHERE user_id = ? OR user_id IS NULL ORDER BY id DESC LIMIT 1').get(userId);
   return r ? { ...r, summary: safeJson(r.summary, {}) } : null;
 }
-export const listSnapshots = (limit = 200) =>
-  db.prepare('SELECT * FROM snapshots ORDER BY id DESC LIMIT ?').all(limit).map((r) => ({ ...r, summary: safeJson(r.summary, {}) }));
+export const listSnapshots = (limit = 200, userId = null) =>
+  db.prepare('SELECT * FROM snapshots WHERE user_id = ? OR user_id IS NULL ORDER BY id DESC LIMIT ?').all(userId, limit).map((r) => ({ ...r, summary: safeJson(r.summary, {}) }));
 export function saveAlerts(list) {
   const ins = db.prepare('INSERT INTO alerts (ts, type, severity, instrument_id, message, user_id) VALUES (?,?,?,?,?,?)');
   const ts = new Date().toISOString();
@@ -494,6 +523,9 @@ export function deleteUser(id) {
   for (const t of ['positions', 'trades']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(id);
   db.prepare('DELETE FROM alerts WHERE user_id = ?').run(id);
   db.prepare('DELETE FROM invites WHERE user_id = ?').run(id);
+  db.prepare('DELETE FROM user_instruments WHERE user_id = ?').run(id);
+  db.prepare('DELETE FROM snapshots WHERE user_id = ?').run(id);
+  db.prepare('UPDATE instruments SET owner_id = NULL WHERE owner_id = ?').run(id);
   db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id);
   db.prepare('DELETE FROM trusted_devices WHERE user_id = ?').run(id);
   db.prepare('DELETE FROM portfolio_shares WHERE owner_id = ? OR viewer_id = ?').run(id, id);

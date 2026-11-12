@@ -128,7 +128,25 @@ test('server: setup, sign-in, roles, portfolio isolation, sharing, messages', as
   // a regular user cannot change server settings or accounts, but can change their own settings
   assert.equal((await bob('POST', '/users', { username: 'eve', password: 'eve-password' })).status, 403);
   assert.equal((await bob('PUT', '/settings', { smtp: { host: 'evil' } })).status, 403);
-  assert.equal((await bob('POST', '/categories/toggle', { category: 'fx', enabled: false })).status, 403);
+  // instruments: everyone has their own set over the shared catalogue
+  const fxOf = async (c) => (await c('GET', '/instruments')).body.filter((i) => i.category === 'fx');
+  assert.equal((await bob('POST', '/categories/toggle', { category: 'fx', enabled: false })).status, 200);
+  assert.ok((await fxOf(bob)).every((i) => !i.enabled)); assert.ok((await fxOf(alice)).every((i) => i.enabled)); // only bob's set changed
+  assert.equal((await bob('GET', '/dashboard')).body.instruments.some((a) => a.id === 'EURUSD'), false);
+  assert.equal((await alice('GET', '/dashboard')).body.instruments.some((a) => a.id === 'EURUSD'), true);
+  assert.equal((await bob('POST', '/categories/toggle', { category: 'fx', enabled: true })).status, 200);
+  assert.equal((await bob('PUT', '/instruments/EURUSD', { enabled: false })).body.enabled, false);       // own switch
+  assert.equal((await bob('PUT', '/instruments/EURUSD', { enabled: true })).body.enabled, true);
+  assert.equal((await bob('PUT', '/instruments/EURUSD', { name: 'hacked' })).status, 403);               // a built-in entry is not his to edit
+  assert.equal((await bob('DELETE', '/instruments/EURUSD')).status, 403);
+  const groupId = (await bob('GET', '/groups')).body[0].id;
+  const mine = await bob('POST', '/instruments', { id: 'BOBCO', name: 'Bob Co', class: 'stock', group_id: groupId, symbols: { yahoo: 'BOBCO' } });
+  assert.equal(mine.status, 201); assert.equal(mine.body.enabled, true); assert.equal(mine.body.canEdit, true);
+  const seenByAlice = (await alice('GET', '/instruments')).body.find((i) => i.id === 'BOBCO');
+  assert.equal(seenByAlice.enabled, false); assert.equal(seenByAlice.canEdit, true);                     // off for others; an administrator may edit
+  assert.equal((await carol('GET', '/instruments')).body.find((i) => i.id === 'BOBCO').enabled, false);
+  assert.equal((await bob('PUT', '/instruments/BOBCO', { name: 'Bob Company' })).body.name, 'Bob Company');
+  assert.equal((await bob('DELETE', '/instruments/BOBCO')).status, 200);
   assert.equal((await bob('PUT', '/settings', { capital: { start: 5000, currency: 'EUR' } })).status, 200);
   assert.equal((await bob('GET', '/settings')).body.settings.capital.start, 5000);
   assert.equal((await alice('GET', '/settings')).body.settings.capital.start, 0);   // capital is personal

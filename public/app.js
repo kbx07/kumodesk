@@ -728,7 +728,7 @@ function pushCard() {
 }
 /** Version card: installed and latest version, and the update itself where the app can do it. */
 function updateCard() {
-  const box = h('div', { class: 'card section-gap' }, h('h3', null, T('upd.title')), h('p', { class: 'muted' }, T('loading')));
+  const box = h('div', { class: 'card' }, h('h3', null, T('upd.title')), h('p', { class: 'muted' }, T('loading')));
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const draw = (d, busy) => {
     const cmd = d.mode === 'docker' ? 'docker compose pull && docker compose up -d' : 'update';
@@ -841,8 +841,7 @@ async function viewSettings() {
         look.onsubmit = async (e) => { e.preventDefault(); const d = formData(look); if (await save({ appearance: { theme: d.theme, loginBg: d.loginBg || ap.loginBg, appBg: d.appBg || ap.appBg } })) { lookCfg = { ...lookCfg, ...d }; applyLook(); render(); } };
       }
       return h('div', null,
-        h('div', { class: 'card' }, h('h3', null, T('set.tab.general')), f),
-        isAdmin() ? updateCard() : h('p', { class: 'hint' }, `KumoDesk ${status?.version || ''}`),
+        h('div', { class: 'card' }, h('h3', null, T('set.tab.general')), f, h('p', { class: 'hint' }, `KumoDesk ${status?.version || ''}`)),
         h('div', { class: 'card section-gap' }, h('h3', null, T('acc.title'), h('span', { class: 'muted small' }, T('user.role.' + me.role))), acc),
         twofaCard(),
         pushCard(),
@@ -972,6 +971,7 @@ async function viewSettings() {
             h('button', { class: 'btn sm danger', onclick: async () => { if (!confirm(T('grp.confirmDelete', { name: g.name }))) return; try { await api(`/groups/${g.id}`, { method: 'DELETE' }); render(); } catch (e) { toast(TE(e.message), true); } } }, T('delete'))))))));
       return h('div', { class: 'card' }, h('h3', null, T('set.tab.groups'), h('button', { class: 'btn sm', onclick: () => groupDialog(null) }, '+ ' + T('grp.add'))), table, h('p', { class: 'hint' }, T('grp.hint')));
     },
+    updates() { return updateCard(); },
     instruments() {
       const gname = Object.fromEntries(groups.map((g) => [g.id, g]));
       const cats = [...new Set(instruments.map((i) => i.category))];
@@ -993,8 +993,8 @@ async function viewSettings() {
               h('td', { class: 'small' }, `${i.symbols[prov] || '—'}`, h('span', { class: 'name' }, prov)),
               h('td', { class: 'small ' + (i.last_error ? 'err' : 'muted'), title: i.last_error || '' }, i.last_error ? T('ins.error') : fmtTs(i.last_fetch_at)),
               h('td', null, h('input', { type: 'checkbox', checked: i.enabled, onchange: async (e) => { try { await api(`/instruments/${encodeURIComponent(i.id)}`, { method: 'PUT', body: { enabled: e.target.checked } }); await loadMarket(); render(); } catch (err) { toast(TE(err.message), true); } } })),
-              h('td', { class: 'nowrap' }, h('button', { class: 'btn sm', onclick: () => instrumentDialog(i) }, T('edit')), ' ',
-                h('button', { class: 'btn sm danger', onclick: async () => { if (!confirm(T('ins.confirmDelete', { id: i.id }))) return; await api(`/instruments/${encodeURIComponent(i.id)}`, { method: 'DELETE' }); await loadMarket(); render(); } }, T('delete'))));
+              h('td', { class: 'nowrap' }, i.canEdit ? [h('button', { class: 'btn sm', onclick: () => instrumentDialog(i) }, T('edit')), ' ',
+                h('button', { class: 'btn sm danger', onclick: async () => { if (!confirm(T('ins.confirmDelete', { id: i.id }))) return; try { await api(`/instruments/${encodeURIComponent(i.id)}`, { method: 'DELETE' }); await loadMarket(); render(); } catch (err) { toast(TE(err.message), true); } } }, T('delete'))] : null));
           }))));
         wrap.append(h('div', { class: 'card catcard' },
           h('div', { class: 'cathead' },
@@ -1008,6 +1008,7 @@ async function viewSettings() {
       }
       return h('div', null,
         h('div', { class: 'actions', style: 'margin:0 0 12px' }, h('button', { class: 'btn primary', onclick: () => instrumentDialog(null) }, '+ ' + T('ins.add')), h('button', { class: 'btn', onclick: () => importDialog() }, T('ins.import')), h('span', { class: 'hint', style: 'margin:0' }, T('ins.hint'))),
+        h('p', { class: 'hint', style: 'margin:0 0 12px' }, T('ins.own')),
         wrap);
     },
     notify() {
@@ -1164,7 +1165,7 @@ async function viewSettings() {
     document.body.append(dlg); dlg.showModal();
   }
 
-  const tabs = isAdmin() ? ['general', 'users', 'capital', 'data', 'analysis', 'groups', 'instruments', 'notify', 'risk', 'logs'] : ['general', 'capital', 'risk', 'logs'];
+  const tabs = isAdmin() ? ['general', 'users', 'capital', 'data', 'analysis', 'groups', 'instruments', 'notify', 'risk', 'updates', 'logs'] : ['general', 'capital', 'instruments', 'risk', 'logs'];
   if (!tabs.includes(settingsTab)) settingsTab = 'general';
   const body = h('div');
   const tabBar = h('div', { class: 'tabs' }, tabs.map((k) => h('button', { class: k === settingsTab ? 'on' : '', onclick: () => { settingsTab = k; render(); } }, T('set.tab.' + k))));

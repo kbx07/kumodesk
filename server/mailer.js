@@ -121,6 +121,10 @@ export function recipientsByLang(settings, users = []) {
 
 /** Report after a group's close: one message per language of the recipients. */
 export async function sendReport(ctx) {
+  if (ctx.to) { // one user's own report, in their language
+    const { subject, html, text } = buildReport(ctx);
+    return send(ctx.settings, subject, html, text, ctx.to);
+  }
   for (const [lang, to] of recipientsByLang(ctx.settings, ctx.users)) {
     const { subject, html, text } = buildReport({ ...ctx, lang });
     await send(ctx.settings, subject, html, text, to);
