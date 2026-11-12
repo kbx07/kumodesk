@@ -572,3 +572,5 @@ dialog.lightbox img { display: block; max-width: 90vw; max-height: 78vh; border-
 .instpick:hover, .instpick:focus { border-color: var(--border); background-color: var(--surface); }
 .instpick option, .instpick optgroup { font-size: 13px; font-weight: 400; }
 .fwhen { font-weight: 400; }
+.periodpick { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; font-weight: 400; }
+.periodpick select { width: auto; height: 28px; font-size: 12px; }

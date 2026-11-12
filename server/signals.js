@@ -51,7 +51,7 @@ export async function updateSignals({ days = 370, now = new Date() } = {}) {
   running = true;
   try {
     // one-off: rebuild the history so the chart arrows (added later) cover the past year too
-    if (db.getMeta('marksVersion') !== '2') { db.resetSignals(); db.setMeta('marksVersion', '2'); }
+    if (db.getMeta('marksVersion') !== '3') { db.resetSignals(); db.setMeta('marksVersion', '3'); }
     const instruments = db.listInstruments().filter((i) => i.enabled);
     const settings = db.getSettings();
     const groupsById = Object.fromEntries(db.listGroups().map((g) => [g.id, g]));
@@ -85,7 +85,7 @@ export async function updateSignals({ days = 370, now = new Date() } = {}) {
         const bar = barOf[a.id];
         if (!a.ok || !bar) continue; // no new candle that day (holiday, weekend)
         const play = a.action === 'PLAY' ? a.dir : null;
-        if (play && play !== (playState[a.id] || null)) db.addPlayMark(a.id, d, a.dir, a.grade);
+        if (play && play !== (playState[a.id] || null)) db.addPlayMark(a.id, d, a.dir, a.grade, bar.c, a.plan?.params?.stop ?? null);
         playState[a.id] = play;
         for (const st of a.funnel || []) {
           const k = `${a.id}|${st.key}`;

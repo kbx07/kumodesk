@@ -33,14 +33,22 @@ export function getMarket(userId = null) {
     if (pairs.some((p) => h1[p.id].length)) sessions = computeSessions(h1, pairs);
   }
   const market = analyzeMarket({ instruments, candlesById, groupsById, positions: userId ? db.listPositions(userId) : [], settings, sessions });
-  // "green light": signal date and the result of entering right after it, following the plan
-  const sig = Object.fromEntries(db.openSignals().map((x) => [x.instrument_id, x]));
+  // "Green light": the candle on which the recommendation last turned into "trade", and the result of entering
+  // right after it. The stored history ends with the last finished day; the newest candle comes from this analysis.
+  const marks = Object.fromEntries(db.lastPlayMarks().map((x) => [x.instrument_id, x]));
+  const through = db.getMeta('signalsThrough') || '';
+  let playState = {};
+  try { playState = JSON.parse(db.getMeta('playState') || '{}'); } catch { playState = {}; }
+  const r2 = (v) => Math.round(v * 100) / 100;
   for (const a of market.instruments) {
     if (!a.ok) continue;
-    const x = sig[a.id];
-    if (x) a.signal = { date: x.opened, dir: x.dir, entry: x.entry, stop: x.stop, r: Math.round(resultR(x.dir, x.entry, x.stop, a.close) * 100) / 100, pct: Math.round(((x.dir === 'LONG' ? 1 : -1) * (a.close - x.entry) / x.entry) * 10000) / 100 };
-    else if (a.action === 'PLAY') a.signal = { date: a.date, dir: a.dir, entry: a.close, stop: a.plan.params.stop, r: 0, pct: 0, fresh: true }; // signal from the latest candle
-    else a.signal = null;
+    if (a.action !== 'PLAY') { a.signal = null; continue; }
+    const x = marks[a.id];
+    const continuing = a.date <= through || playState[a.id] === a.dir; // "trade" already before the newest candle
+    if (x && x.dir === a.dir && x.entry != null && continuing) {
+      a.signal = { date: x.date, dir: x.dir, entry: x.entry, stop: x.stop, fresh: x.date === a.date,
+        r: x.stop != null ? r2(resultR(x.dir, x.entry, x.stop, a.close)) : null, pct: r2(((x.dir === 'LONG' ? 1 : -1) * (a.close - x.entry) / x.entry) * 100) };
+    } else a.signal = { date: a.date, dir: a.dir, entry: a.close, stop: a.plan.params.stop, r: 0, pct: 0, fresh: true }; // from the latest candle
   }
   cache.set(key, { at: now, market });
   if (cache.size > 200) cache.delete(cache.keys().next().value);

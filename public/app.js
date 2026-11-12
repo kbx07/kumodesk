@@ -405,7 +405,6 @@ function viewDashboard() {
     h('span', { class: 'muted small' }, T('banner.updated', { ts: fmtTs(m.generatedAt), n: m.counts.analyzed, total: m.counts.total }))));
 
   root.append(funnelCard(m));
-  if (m.portfolio.positions.length) root.append(positionsCard(m.portfolio.positions, true));
 
   // --- primary target ---
   const p = m.primary ? byId[m.primary] : null;
@@ -423,16 +422,16 @@ function viewDashboard() {
       p.concentration ? h('p', { class: 'hint' }, '⚠ ' + T('concentration', { cur: p.concentration })) : '');
   }
 
-  // --- top setups ---
-  const top = m.ranking.map((id) => byId[id]).filter((a) => a.grade !== 'D').slice(0, 8);
-  const topCard = h('div', { class: 'card' }, h('h3', null, T('panel.top'), h('span', { class: 'muted small' }, T('panel.top.legend'))));
-  if (!top.length) topCard.append(h('p', { class: 'muted' }, T('top.none')));
+  // --- open positions (with the H4 advice) ---
+  const pos = m.portfolio.positions;
+  const topCard = h('div', { class: 'card' }, h('h3', null, T('panel.positions'), h('span', { class: 'muted small' }, status?.h4?.next ? T('h4.next', { ts: fmtTs(status.h4.next) }) : '')));
+  if (!pos.length) topCard.append(h('p', { class: 'muted' }, T('pf.none')));
   else topCard.append(h('div', { class: 'tablewrap' }, h('table', null,
-    h('thead', null, h('tr', null, ['#', T('col.instrument'), T('col.dir'), T('col.action'), T('col.op'), T('col.sym'), T('col.grade')].map((x) => h('th', null, x)))),
-    h('tbody', null, top.map((a, i) => h('tr', { class: 'click', onclick: () => { location.hash = `#/i/${encodeURIComponent(a.id)}`; } },
-      h('td', { class: 'muted num' }, i + 1), h('td', { class: 'nowrap' }, h('b', null, a.id), a.correlated ? h('span', { class: 'name', title: T('correlated', a.correlated) }, '≈ ' + a.correlated.with) : null), h('td', null, dirBadge(a.dir)),
-      h('td', null, T('action.' + a.action)), h('td', { class: 'num' }, a.op),
-      h('td', null, T('sym.' + a.sym)), h('td', null, gradeBox(a.grade))))))));
+    h('thead', null, h('tr', null, [T('col.instrument'), T('col.dir'), T('pf.advice'), T('pf.result'), 'H4'].map((x) => h('th', null, x)))),
+    h('tbody', null, pos.map((p) => h('tr', { class: 'click', title: adviceText(p.advice), onclick: () => { location.hash = `#/i/${encodeURIComponent(p.instrument_id)}?tf=h4`; } },
+      h('td', null, h('b', null, p.instrument_id)), h('td', null, dirBadge(p.direction)), h('td', null, adviceBadge(p.advice)),
+      h('td', { class: 'num nowrap' }, h('span', { class: 'live num', 'data-live': p.instrument_id, 'data-dir': p.direction, 'data-entry': p.entry ?? '', 'data-stop': p.stop_initial ?? p.stop ?? '' }, h('span', { class: 'muted small' }, adviceResult(p.advice)))),
+      h('td', null, p.advice?.h4Score != null ? miniBar(p.advice.h4Score) : h('span', { class: 'muted' }, '–'))))))));
 
   // --- threats ---
   const threats = [...m.portfolio.threats];
@@ -481,7 +480,10 @@ function allTable(m) {
     ['align', 'col.tf'], ['sym', 'col.sym'], ['op', 'col.op'], ['grade', 'col.grade'], ['action', 'col.action'], ['failedAt', 'col.stage'], ['held', 'col.held'], ['sigDate', 'col.signal'], ['sigR', 'col.sigResult'],
   ];
   const draw = () => {
-    let rows = m.instruments.filter((a) => (tableFilter === 'all' || a.category === tableFilter) && (!onlySetups || (a.ok && a.grade !== 'D')) && (!funnelFilter || a.failedAt === funnelFilter));
+    // "qualified to trade" period: by default only what turned into "trade" on the latest candle
+    const cutoff = Number(sigPeriod) ? new Date(Date.now() - Number(sigPeriod) * 86400000).toISOString().slice(0, 10) : null;
+    const inPeriod = (a) => sigPeriod === 'all' || (a.ok && a.signal && (sigPeriod === 'last' ? a.signal.date === a.date : a.signal.date >= cutoff));
+    let rows = m.instruments.filter((a) => (tableFilter === 'all' || a.category === tableFilter) && (!onlySetups || (a.ok && a.grade !== 'D')) && (funnelFilter ? a.failedAt === funnelFilter : inPeriod(a)));
     const k = tableSort.key;
     rows = [...rows].sort((x, y) => {
       if (x.ok !== y.ok) return x.ok ? -1 : 1;
@@ -496,7 +498,10 @@ function allTable(m) {
     card.replaceChildren(
       h('h3', null, T('panel.all'), h('span', { class: 'chips' },
         classes.map((cl) => h('button', { class: 'chip' + (tableFilter === cl ? ' on' : ''), onclick: () => { tableFilter = cl; store.set('kd.filter', cl); draw(); } }, cl === 'all' ? T('class.all') : catName(cl))),
-        h('button', { class: 'chip' + (onlySetups ? ' on' : ''), onclick: () => { onlySetups = !onlySetups; draw(); } }, T('filter.setups')))),
+        h('button', { class: 'chip' + (onlySetups ? ' on' : ''), onclick: () => { onlySetups = !onlySetups; draw(); } }, T('filter.setups')),
+        h('label', { class: 'periodpick' }, h('span', { class: 'muted small' }, T('filter.period')),
+          h('select', { onchange: (e) => { sigPeriod = e.target.value; if (funnelFilter) { funnelFilter = null; render(); } else draw(); } }, ['last', '7', '30', '91', '182', '365', 'all'].map((v) => h('option', { value: v, selected: v === sigPeriod }, T('period.' + v))))))),
+      !rows.length ? h('p', { class: 'muted' }, T('filter.period.none')) : '',
       h('div', { class: 'tablewrap' }, h('table', null,
         h('thead', null, h('tr', null, cols.map(([key, label]) => h('th', { class: 'sortable', onclick: () => { tableSort = { key, dir: tableSort.key === key ? -tableSort.dir : (['id', 'dir', 'align', 'sym', 'grade', 'action', 'failedAt'].includes(key) ? 1 : -1) }; draw(); } },
           T(label) + (tableSort.key === key ? (tableSort.dir > 0 ? ' ↑' : ' ↓') : ''))))),
@@ -1208,6 +1213,7 @@ function viewHelp() {
 
 // ---------- SIGN-IN ----------
 let prefillLogin = '';
+let sigPeriod = 'last'; // dashboard table: which "trade" qualifications to show
 async function showAuth() {
   let st;
   try { st = await api('/auth/state'); } catch { st = { setup: false, user: null, appearance: lookCfg }; }
