@@ -75,6 +75,7 @@ function applyLook() {
   }
 }
 const isAdmin = () => me?.role === 'admin';
+const isSuper = () => !!me?.super; // the first account: updates, market data, notifications, logs
 let toastTimer;
 function toast(msg, badTone = false) {
   const el = $('#toast');
@@ -783,7 +784,7 @@ function twofaCard() {
 }
 async function viewSettings() {
   const root = h('div', null, h('div', { class: 'muted' }, T('loading')));
-  const [{ settings: s, providers, classes, loginBgs, appBgs, themes }, groups, instruments] = await Promise.all([api('/settings'), api('/groups'), api('/instruments')]);
+  const [{ settings: s, providers, classes, loginBgs, appBgs, themes, mailReady }, groups, instruments] = await Promise.all([api('/settings'), api('/groups'), api('/instruments')]);
   usersCache = null;
   const save = async (patch, msg = T('saved')) => {
     try { await api('/settings', { method: 'PUT', body: patch }); toast(msg); await loadMarket(); return true; }
@@ -800,9 +801,9 @@ async function viewSettings() {
       const f = h('form', { class: 'form' },
         field(T('set.uiLang'), h('select', { name: 'ui' }, ['auto', 'pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === langPref }, l === 'auto' ? T('set.auto') : T('lang.' + l)))), T('set.uiLang.hint')),
         h('div', { class: 'fieldlike' }, h('span', null, T('set.scheme')), schemeSwitch(), h('span', { class: 'muted' }, T('set.scheme.hint'))),
-        isAdmin() ? field(T('set.mailLang'), h('select', { name: 'mail' }, ['pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === (s.notify.lang || lang) }, T('lang.' + l)))), T('set.mailLang.hint')) : null,
+        isSuper() ? field(T('set.mailLang'), h('select', { name: 'mail' }, ['pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === (s.notify.lang || lang) }, T('lang.' + l)))), T('set.mailLang.hint')) : null,
         h('div', null, h('button', { class: 'btn primary' }, T('save'))));
-      f.onsubmit = async (e) => { e.preventDefault(); const d = formData(f); if (isAdmin()) await save({ notify: { lang: d.mail } }); setLang(d.ui); };
+      f.onsubmit = async (e) => { e.preventDefault(); const d = formData(f); if (isSuper()) await save({ notify: { lang: d.mail } }); setLang(d.ui); };
       // account: e-mail and password change
       const acc = h('form', { class: 'form' },
         field(T('auth.username'), h('input', { type: 'text', value: me.username, disabled: true })),
@@ -842,7 +843,7 @@ async function viewSettings() {
       }
       return h('div', null,
         h('div', { class: 'card' }, h('h3', null, T('set.tab.general')), f, h('p', { class: 'hint' }, `KumoDesk ${status?.version || ''}`)),
-        h('div', { class: 'card section-gap' }, h('h3', null, T('acc.title'), h('span', { class: 'muted small' }, T('user.role.' + me.role))), acc),
+        h('div', { class: 'card section-gap' }, h('h3', null, T('acc.title'), h('span', { class: 'muted small' }, T(me.super ? 'user.role.super' : 'user.role.' + me.role))), acc),
         twofaCard(),
         pushCard(),
         look ? h('div', { class: 'card section-gap' }, h('h3', null, T('look.title')), look, h('p', { class: 'hint' }, T('look.hint'))) : '');
@@ -876,7 +877,7 @@ async function viewSettings() {
       const box = h('div', null, h('div', { class: 'muted' }, T('loading')));
       const userDialog = (u) => {
         // new account: either a password typed here, or an e-mailed invitation where the person sets their own
-        const canInvite = !!s.smtp.host;
+        const canInvite = !!mailReady;
         const passInput = h('input', { type: 'password', name: 'password', required: !u, minlength: 8, autocomplete: 'new-password', placeholder: u ? T('usr.password.keep') : '' });
         const passField = field(T('auth.password'), passInput, T('auth.rules'));
         const langField = field(T('usr.inviteLang'), h('select', { name: 'lang' }, ['pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === lang }, T('lang.' + l)))), T('usr.invite.hint'));
@@ -886,25 +887,27 @@ async function viewSettings() {
         const modeField = u ? null : field(T('usr.mode'), modeSel, canInvite ? null : T('usr.mode.invite.off'));
         const f = h('form', { class: 'form' },
           field(T('auth.username'), h('input', { type: 'text', name: 'username', value: u?.username || '', required: true, disabled: !!u, minlength: 3, maxlength: 32, autocomplete: 'off' })),
-          field(T('usr.role'), h('select', { name: 'role' }, ['user', 'admin'].map((r) => h('option', { value: r, selected: r === (u?.role || 'user') }, T('user.role.' + r))))),
+          field(T('usr.role'), h('select', { name: 'role', disabled: !!u?.super }, ['user', 'admin'].map((r) => h('option', { value: r, selected: r === (u?.role || 'user') }, T('user.role.' + r))))),
           field(T('acc.email'), h('input', { type: 'email', name: 'email', value: u?.email || '', autocomplete: 'off' })),
           modeField, passField, langField,
           u?.twofa?.enabled ? h('label', { class: 'inline-check wide' }, h('input', { type: 'checkbox', name: 'reset2fa' }), T('usr.reset2fa')) : null);
         dialog(u ? T('usr.edit', { name: u.username }) : T('usr.add'), f, async () => {
           const d = formData(f);
-          await api(u ? `/users/${u.id}` : '/users', { method: u ? 'PUT' : 'POST', body: u ? { role: d.role, email: d.email, reset2fa: d.reset2fa === 'on', ...(d.password ? { password: d.password } : {}) } : d.mode === 'invite' ? { username: d.username, role: d.role, email: d.email, invite: true, lang: d.lang } : { username: d.username, role: d.role, email: d.email, password: d.password } });
+          await api(u ? `/users/${u.id}` : '/users', { method: u ? 'PUT' : 'POST', body: u ? { ...(u.super ? {} : { role: d.role }), email: d.email, reset2fa: d.reset2fa === 'on', ...(d.password ? { password: d.password } : {}) } : d.mode === 'invite' ? { username: d.username, role: d.role, email: d.email, invite: true, lang: d.lang } : { username: d.username, role: d.role, email: d.email, password: d.password } });
         }, T('usr.hint'));
       };
       api('/users').then((list) => {
         box.replaceChildren(h('div', { class: 'card' }, h('h3', null, T('set.tab.users'), h('button', { class: 'btn sm', onclick: () => userDialog(null) }, '+ ' + T('usr.add'))),
           h('div', { class: 'tablewrap' }, h('table', null,
-            h('thead', null, h('tr', null, [T('auth.username'), T('usr.role'), T('acc.email'), '2FA', T('usr.created'), ''].map((x) => h('th', null, x)))),
+            h('thead', null, h('tr', null, [T('auth.username'), T('usr.status'), T('usr.role'), T('acc.email'), '2FA', T('usr.created'), ''].map((x) => h('th', null, x)))),
             h('tbody', null, list.map((u) => h('tr', null,
               h('td', null, h('span', { class: 'nowrap' }, h('span', { class: 'avatar', style: 'margin-right:8px' }, u.username.slice(0, 1).toUpperCase()), h('b', null, u.username), u.id === me.id ? h('span', { class: 'name' }, T('usr.you')) : null, u.invited ? h('span', { class: 'badge', style: 'margin-left:8px' }, h('span', { class: 'dot warn' }), T('usr.invited')) : null)),
-              h('td', null, T('user.role.' + u.role)), h('td', { class: 'muted' }, u.email || '–'), h('td', null, h('span', { class: 'badge' }, h('span', { class: `dot ${u.twofa.enabled ? 'good' : 'warn'}` }), T(u.twofa.enabled ? 'twofa.on' : 'twofa.off'))), h('td', { class: 'muted small' }, fmtTs(u.created)),
-              h('td', { class: 'nowrap' }, h('button', { class: 'btn sm', onclick: () => userDialog(u) }, T('edit')), ' ',
+              h('td', { class: 'nowrap small' }, h('span', { class: `dot ${u.online ? 'good' : 'off'}`, style: 'display:inline-block;margin-right:6px' }),
+                u.online ? [T('usr.online'), h('span', { class: 'muted' }, ' · ' + u.devices.join(', '))] : h('span', { class: 'muted', title: u.lastSeen ? fmtTs(u.lastSeen) : '' }, u.lastSeen ? T('usr.lastSeen', { ts: fmtTs(u.lastSeen) }) : T('usr.offline'))),
+              h('td', null, T(u.super ? 'user.role.super' : 'user.role.' + u.role)), h('td', { class: 'muted' }, u.email || '–'), h('td', null, h('span', { class: 'badge' }, h('span', { class: `dot ${u.twofa.enabled ? 'good' : 'warn'}` }), T(u.twofa.enabled ? 'twofa.on' : 'twofa.off'))), h('td', { class: 'muted small' }, fmtTs(u.created)),
+              h('td', { class: 'nowrap' }, u.super && u.id !== me.id ? null : [h('button', { class: 'btn sm', onclick: () => userDialog(u) }, T('edit')), ' '],
                 u.invited ? [h('button', { class: 'btn sm', onclick: async (e) => { e.target.disabled = true; try { await api(`/users/${u.id}/invite`, { method: 'POST' }); toast(T('usr.resent')); } catch (err) { toast(TE(err.message), true); } e.target.disabled = false; } }, T('usr.resend')), ' '] : null,
-                u.id !== me.id ? h('button', { class: 'btn sm danger', onclick: async () => { if (!confirm(T('usr.confirmDelete', { name: u.username }))) return; try { await api(`/users/${u.id}`, { method: 'DELETE' }); render(); } catch (e) { toast(TE(e.message), true); } } }, T('delete')) : null)))))),
+                u.id !== me.id && !u.super ? h('button', { class: 'btn sm danger', onclick: async () => { if (!confirm(T('usr.confirmDelete', { name: u.username }))) return; try { await api(`/users/${u.id}`, { method: 'DELETE' }); render(); } catch (e) { toast(TE(e.message), true); } } }, T('delete')) : null)))))),
           h('p', { class: 'hint' }, T('usr.info'))));
       }).catch((e) => box.replaceChildren(h('div', { class: 'card err' }, TE(e.message))));
       return box;
@@ -1165,7 +1168,8 @@ async function viewSettings() {
     document.body.append(dlg); dlg.showModal();
   }
 
-  const tabs = isAdmin() ? ['general', 'users', 'capital', 'data', 'analysis', 'groups', 'instruments', 'notify', 'risk', 'updates', 'logs'] : ['general', 'capital', 'instruments', 'risk', 'logs'];
+  const tabs = isSuper() ? ['general', 'users', 'capital', 'data', 'analysis', 'groups', 'instruments', 'notify', 'risk', 'updates', 'logs']
+    : isAdmin() ? ['general', 'users', 'capital', 'analysis', 'groups', 'instruments', 'risk'] : ['general', 'capital', 'instruments', 'risk'];
   if (!tabs.includes(settingsTab)) settingsTab = 'general';
   const body = h('div');
   const tabBar = h('div', { class: 'tabs' }, tabs.map((k) => h('button', { class: k === settingsTab ? 'on' : '', onclick: () => { settingsTab = k; render(); } }, T('set.tab.' + k))));
@@ -1499,7 +1503,7 @@ function renderUserMenu() {
   if (!me) return;
   $('#userbtn').replaceChildren(h('span', { class: 'avatar' }, me.username.slice(0, 1).toUpperCase()), h('span', { class: 'uname' }, me.username));
   $('#usermenu').replaceChildren(
-    h('div', { class: 'bellhead' }, h('b', null, me.username), h('span', { class: 'muted small' }, T('user.role.' + me.role))),
+    h('div', { class: 'bellhead' }, h('b', null, me.username), h('span', { class: 'muted small' }, T(me.super ? 'user.role.super' : 'user.role.' + me.role))),
     h('div', { class: 'menurow' }, h('span', { class: 'muted small' }, T('set.scheme')), schemeSwitch()),
     h('a', { class: 'menuitem', href: '#/settings', onclick: () => { settingsTab = 'general'; $('#usermenu').hidden = true; } }, T('acc.title')),
     h('button', { class: 'menuitem', onclick: () => { $('#usermenu').hidden = true; logout(); } }, T('user.logout')));
@@ -1638,7 +1642,7 @@ async function startApp() {
     capitalCfg = cfg.settings.capital;
     api('/capital').then((c) => { currentEquity = c.stats.equity; }).catch(() => {});
     // first launch: e-mail language = browser language
-    if (isAdmin() && !cfg.settings.notify.lang) api('/settings', { method: 'PUT', body: { notify: { lang } } }).catch(() => {});
+    if (isSuper() && !cfg.settings.notify.lang) api('/settings', { method: 'PUT', body: { notify: { lang } } }).catch(() => {});
   } catch (e) { if (me) toast(TE(e.message), true); }
   render();
   poll();

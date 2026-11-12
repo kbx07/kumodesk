@@ -86,10 +86,44 @@ export function requireAuth(req, res, next) {
   const user = currentUser(req);
   if (!user) return res.status(401).json({ error: db.countUsers() === 0 ? 'err.setupNeeded' : 'err.loginNeeded' });
   req.user = user;
+  touch(user.id, req);
   // an account with mandatory two-factor authentication that is not enabled yet: setup only
   if (user.twofa.required && !user.twofa.enabled && req.path !== '/status') return res.status(403).json({ error: 'err.twofaRequired' });
   next();
 }
+export function requireSuper(req, res, next) {
+  if (!req.user?.super) return res.status(403).json({ error: 'err.superOnly' });
+  next();
+}
+
+// ---------- presence: who is using the app right now, and on what ----------
+const ONLINE_MS = 3 * 60 * 1000;
+const seen = new Map(); // `${userId}|${device}` -> time of the last request
+/** Short device label from the User-Agent header, e.g. "Chrome · Windows". */
+export function deviceLabel(ua) {
+  const s = String(ua || '');
+  const os = /iPhone/.test(s) ? 'iPhone' : /iPad/.test(s) ? 'iPad' : /Android/.test(s) ? 'Android' : /Windows/.test(s) ? 'Windows' : /Mac OS X|Macintosh/.test(s) ? 'macOS' : /Linux/.test(s) ? 'Linux' : '';
+  const br = /Edg\//.test(s) ? 'Edge' : /OPR\//.test(s) ? 'Opera' : /Firefox\//.test(s) ? 'Firefox' : /Chrome\//.test(s) ? 'Chrome' : /Safari\//.test(s) ? 'Safari' : '';
+  return [br, os].filter(Boolean).join(' · ') || 'unknown';
+}
+function touch(userId, req) {
+  const now = Date.now();
+  seen.set(`${userId}|${deviceLabel(req.headers['user-agent'])}`, now);
+  if (seen.size > 5000) for (const [k, at] of seen) if (now - at > 86400000) seen.delete(k);
+}
+/** { online, devices, lastSeen } for a user; kept in memory, so it starts empty after a restart. */
+export function presence(userId, now = Date.now()) {
+  const devices = []; let last = 0;
+  for (const [k, at] of seen) {
+    const i = k.indexOf('|');
+    if (Number(k.slice(0, i)) !== userId) continue;
+    if (at > last) last = at;
+    if (now - at < ONLINE_MS) devices.push(k.slice(i + 1));
+  }
+  return { online: devices.length > 0, devices, lastSeen: last ? new Date(last).toISOString() : null };
+}
+export const forgetPresence = (userId) => { for (const k of seen.keys()) if (k.startsWith(`${userId}|`)) seen.delete(k); };
+
 export function requireAdmin(req, res, next) {
   if (req.user?.role !== 'admin') return res.status(403).json({ error: 'err.adminOnly' });
   next();

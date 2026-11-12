@@ -237,15 +237,29 @@ test('server: setup, sign-in, roles, portfolio isolation, sharing, messages', as
   assert.equal((await bob('POST', '/push/test')).status, 400);
 
   // logs: a user sees only their own entries, an administrator sees all
-  const bobLogs = (await bob('GET', '/logs')).body.rows;
-  assert.ok(bobLogs.length > 0); assert.ok(bobLogs.every((r) => r.user === 'bob')); assert.ok(bobLogs.some((r) => r.code === 'auth.login'));
-  assert.equal(bobLogs[0].ip, undefined);
+  assert.equal((await bob('GET', '/logs')).status, 403);
+  assert.equal((await carol('GET', '/logs')).body.error, 'err.superOnly');           // an ordinary administrator neither
   const allLogs = (await alice('GET', '/logs?limit=500')).body.rows;
   assert.ok(allLogs.some((r) => r.user === 'bob')); assert.ok(allLogs.some((r) => r.code === 'system.start' && r.user === null));
   assert.ok(allLogs.some((r) => r.code === 'trade.close')); assert.ok(allLogs.some((r) => r.code === 'auth.loginFailed'));
   assert.ok((await alice('GET', '/logs?category=trade')).body.rows.every((r) => r.category === 'trade'));
   assert.ok((await alice('GET', '/logs?user=2')).body.rows.every((r) => r.user === 'bob'));
-  assert.ok((await bob('GET', '/logs?user=1')).body.rows.every((r) => r.user === 'bob')); // the user filter has no effect for a regular account
+
+  // super administrator: the first account; other administrators cannot change it or reach server-level settings
+  const people = (await carol('GET', '/users')).body;
+  assert.equal(people.find((u) => u.username === 'alice').super, true); assert.equal(people.find((u) => u.username === 'carol').super, false);
+  assert.equal((await carol('PUT', '/users/1', { role: 'user' })).body.error, 'err.superProtected');
+  assert.equal((await carol('PUT', '/users/1', { password: 'taken-over-1' })).status, 403);
+  assert.equal((await carol('DELETE', '/users/1')).status, 403);
+  assert.equal((await alice('PUT', '/users/1', { role: 'user' })).status, 403);     // not even by the owner
+  assert.equal((await carol('PUT', '/settings', { smtp: { host: 'evil' } })).body.error, 'err.superOnly');
+  assert.equal((await carol('PUT', '/settings', { notify: { mode: 'off' } })).status, 403);
+  assert.equal((await carol('GET', '/update')).status, 403);
+  assert.equal((await carol('GET', '/settings')).body.settings.smtp.host, '');       // mail server hidden from other administrators
+  assert.equal((await carol('PUT', '/users/2', { email: 'bob@example.test' })).status, 200); // but they do manage ordinary accounts
+  // presence: who is online and on which device
+  const me1 = people.find((u) => u.username === 'carol');
+  assert.equal(me1.online, true); assert.equal(me1.devices.length, 1); assert.ok(me1.lastSeen);
 
   // account: changing the password needs the current one; the last administrator cannot be deleted or demoted
   assert.equal((await bob('PUT', '/account', { current: 'wrong-one', password: 'new-password-1' })).status, 400);
@@ -253,7 +267,7 @@ test('server: setup, sign-in, roles, portfolio isolation, sharing, messages', as
   assert.equal((await anon('POST', '/auth/login', { username: 'bob', password: 'bob-password' })).status, 401);
   assert.equal((await alice('DELETE', '/users/1')).status, 400);                     // oneself
   assert.equal((await alice('DELETE', '/users/3')).status, 200);                     // carol
-  assert.equal((await alice('PUT', '/users/1', { role: 'user' })).status, 400);      // the last administrator
+  assert.equal((await alice('PUT', '/users/1', { role: 'user' })).status, 403);      // the super administrator stays an administrator
   assert.equal((await carol('GET', '/dashboard')).status, 401);                      // a deleted account's session no longer works
 
   // invitations: the administrator sends a link by e-mail and the person sets their own password
@@ -329,4 +343,12 @@ test('update: version comparison and update mode', async () => {
   assert.ok(compareVersions('2.10.0', '2.9.3') > 0); assert.ok(compareVersions('2.6.0', '2.6.1') < 0); assert.equal(compareVersions('3.0.0', '3.0.0'), 0);
   assert.match(VERSION, /^\d+\.\d+\.\d+$/);
   assert.notEqual(updateMode(), 'self'); // a development checkout never updates itself
+});
+
+test('presence: device label from the User-Agent', async () => {
+  const { deviceLabel } = await import('../server/auth.js');
+  assert.equal(deviceLabel('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36'), 'Chrome · Windows');
+  assert.equal(deviceLabel('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'), 'Safari · iPhone');
+  assert.equal(deviceLabel('Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0'), 'Firefox · macOS');
+  assert.equal(deviceLabel(''), 'unknown');
 });

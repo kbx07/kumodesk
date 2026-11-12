@@ -33,6 +33,7 @@ app.disable('x-powered-by');
 app.use(express.json({ limit: '200kb' }));
 app.use('/api', auth.requireAuth); // everything except /api/auth/* requires a session
 const admin = auth.requireAdmin;
+const superOnly = auth.requireSuper; // the first account: updates, market data, notifications, logs
 
 const wrap = (fn) => (req, res) => new Promise((resolve) => resolve(fn(req, res))).catch((e) => {
   const code = e.status || (e.message === 'BUSY' ? 409 : 500);
@@ -60,7 +61,7 @@ function sniffImage(buf) {
 /** Settings visible to a user: personal ones always, server data (SMTP, keys) for administrators only. */
 function publicSettings(user) {
   const s = db.getSettings(user.id);
-  if (user.role === 'admin') return { ...s, smtp: { ...s.smtp, pass: '', passSet: !!s.smtp.pass, oauthClientSecret: '', oauthSecretSet: !!s.smtp.oauthClientSecret, oauthRefreshToken: '', oauthConnected: !!s.smtp.oauthRefreshToken } };
+  if (user.super) return { ...s, smtp: { ...s.smtp, pass: '', passSet: !!s.smtp.pass, oauthClientSecret: '', oauthSecretSet: !!s.smtp.oauthClientSecret, oauthRefreshToken: '', oauthConnected: !!s.smtp.oauthRefreshToken } };
   return { ...s, smtp: { host: '', port: 587, security: 'starttls', user: '', pass: '', from: '', to: '', passSet: false, auth: 'password', oauthClientId: '', oauthClientSecret: '', oauthRefreshToken: '' }, data: { ...s.data, twelvedataKey: '', stooqKey: '', finnhubKey: '', eodhdKey: '' } };
 }
 
@@ -167,11 +168,11 @@ app.get('/api/auth/theme/:slot', wrap((req, res) => {
 app.post('/api/auth/logout', wrap((req, res) => { const u = auth.currentUser(req); if (u) log(req, 'auth', 'auth.logout', {}, 'info', u.id); auth.endSession(req, res); res.json({ ok: true }); }));
 
 // ---------- version and update ----------
-app.get('/api/update', admin, wrap(async (req, res) => {
+app.get('/api/update', superOnly, wrap(async (req, res) => {
   const c = await checkLatest(req.query.check === '1');
   res.json({ current: VERSION, latest: c.latest, checked: c.checked, error: c.error, available: !!c.latest && compareVersions(c.latest, VERSION) > 0, mode: updateMode(), state: updateState });
 }));
-app.post('/api/update', admin, wrap((req, res) => {
+app.post('/api/update', superOnly, wrap((req, res) => {
   if (updateMode() !== 'self') throw bad('err.updateManual');
   if (updateState.running) throw Object.assign(new Error('err.updateBusy'), { status: 409 });
   log(req, 'admin', 'admin.update', { from: VERSION });
@@ -211,7 +212,7 @@ app.put('/api/account', wrap((req, res) => {
   res.json({ user });
 }));
 // list for choosing a recipient (sharing, messages): no e-mail addresses for regular users
-app.get('/api/users', wrap((req, res) => res.json(db.listUsers().map((u) => (req.user.role === 'admin' ? u : { id: u.id, username: u.username, role: u.role })))));
+app.get('/api/users', wrap((req, res) => res.json(db.listUsers().map((u) => (req.user.role === 'admin' ? { ...u, ...auth.presence(u.id) } : { id: u.id, username: u.username, role: u.role })))));
 app.post('/api/users', admin, wrap(async (req, res) => {
   const { username, password, role, email } = req.body || {};
   const byInvite = !!req.body?.invite, lang = LANGS.includes(req.body?.lang) ? req.body.lang : null;
@@ -258,6 +259,8 @@ app.put('/api/users/:id', admin, wrap((req, res) => {
   const id = Number(req.params.id), cur = db.getUser(id);
   if (!cur) return res.status(404).json({ error: 'err.notFound' });
   const b = req.body || {}, patch = {};
+  // the super administrator's account can be changed only by its owner, and always stays an administrator
+  if (cur.super && (req.user.id !== cur.id || (b.role != null && b.role !== 'admin'))) return res.status(403).json({ error: 'err.superProtected' });
   if (b.role != null) {
     patch.role = b.role === 'admin' ? 'admin' : 'user';
     if (cur.role === 'admin' && patch.role !== 'admin' && db.countAdmins() <= 1) throw bad('err.lastAdmin');
@@ -272,9 +275,10 @@ app.delete('/api/users/:id', admin, wrap((req, res) => {
   const id = Number(req.params.id), cur = db.getUser(id);
   if (!cur) return res.status(404).json({ error: 'err.notFound' });
   if (id === req.user.id) throw bad('err.deleteSelf');
+  if (cur.super) return res.status(403).json({ error: 'err.superProtected' });
   if (cur.role === 'admin' && db.countAdmins() <= 1) throw bad('err.lastAdmin');
   for (const fid of db.filesOfUser(id)) fs.rmSync(path.join(FILES_DIR, String(fid)), { force: true });
-  db.deleteUser(id); invalidate();
+  db.deleteUser(id); auth.forgetPresence(id); invalidate();
   log(req, 'admin', 'admin.userDelete', { name: cur.username });
   res.json({ ok: true });
 }));
@@ -304,7 +308,7 @@ app.delete('/api/theme/:slot', admin, wrap((req, res) => {
 // ---------- Google: connecting an account for sending mail (OAuth2) ----------
 // Needs your own OAuth client in Google Cloud with the redirect URI https://<your-domain>/api/auth/google/callback.
 const googleRedirect = (req) => `${req.headers['x-forwarded-proto'] || req.protocol}://${req.headers['x-forwarded-host'] || req.headers.host}/api/auth/google/callback`;
-app.get('/api/google/start', admin, wrap((req, res) => {
+app.get('/api/google/start', superOnly, wrap((req, res) => {
   const s = db.getSettings().smtp;
   if (!s.oauthClientId || !s.oauthClientSecret) throw bad('err.googleClient');
   const state = crypto.randomBytes(24).toString('hex');
@@ -330,7 +334,7 @@ app.get('/api/auth/google/callback', wrap(async (req, res) => {
     done('ok');
   } catch (e) { done(e.message.slice(0, 80)); }
 }));
-app.post('/api/google/disconnect', admin, wrap((req, res) => {
+app.post('/api/google/disconnect', superOnly, wrap((req, res) => {
   const all = db.getSettings(); all.smtp.oauthRefreshToken = ''; all.smtp.auth = 'password';
   db.replaceSetting('smtp', all.smtp);
   res.json({ ok: true });
@@ -370,8 +374,8 @@ app.post('/api/signals/rebuild', admin, wrap((req, res) => {
 
 // ---------- logs ----------
 const LOG_CATEGORIES = ['auth', 'trade', 'system', 'data', 'notify', 'admin'];
-app.get('/api/logs', wrap((req, res) => {
-  const q = req.query, isAdm = req.user.role === 'admin';
+app.get('/api/logs', superOnly, wrap((req, res) => {
+  const q = req.query, isAdm = true;
   const category = LOG_CATEGORIES.includes(q.category) ? q.category : null;
   const rows = db.listLogs({ all: isAdm, userId: isAdm ? (q.user === 'system' ? 0 : Number(q.user) || null) : req.user.id, category, before: Number(q.before) || null, limit: Number(q.limit) || 100 });
   res.json({ categories: LOG_CATEGORIES, rows: rows.map((r) => ({ id: r.id, ts: r.ts, user: r.username || null, category: r.category, level: r.level, code: r.code, params: r.params, ip: isAdm ? r.ip : undefined })) });
@@ -620,6 +624,7 @@ app.get('/api/alerts', wrap((req, res) => {
 app.get('/api/settings', wrap((req, res) => {
   res.json({
     settings: publicSettings(req.user),
+    mailReady: smtpReady(db.getSettings()),
     loginBgs: LOGIN_BGS, appBgs: APP_BGS, themes: THEMES,
     providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, name: p.name, needsKey: p.needsKey, daily: !!p.fetchDaily, live: !!p.fetchQuote })),
     classes: CLASSES,
@@ -633,6 +638,8 @@ app.put('/api/settings', wrap((req, res) => {
   for (const k of db.PERSONAL_KEYS) if (patch[k]) { personal[k] = patch[k]; }
   const globalKeys = Object.keys(patch).filter((k) => !db.PERSONAL_KEYS.includes(k));
   if (globalKeys.length && req.user.role !== 'admin') throw Object.assign(new Error('err.adminOnly'), { status: 403 });
+  // market data, mail server and notification rules belong to the super administrator
+  if (globalKeys.some((k) => ['data', 'smtp', 'notify'].includes(k)) && !req.user.super) throw Object.assign(new Error('err.superOnly'), { status: 403 });
   if (patch.appearance) {
     if (patch.appearance.loginBg != null && !LOGIN_BGS.includes(patch.appearance.loginBg)) throw bad('err.background');
     if (patch.appearance.appBg != null && !APP_BGS.includes(patch.appearance.appBg)) throw bad('err.background');
@@ -673,12 +680,12 @@ app.put('/api/settings', wrap((req, res) => {
   res.json({ settings: publicSettings(req.user) });
 }));
 
-app.post('/api/settings/test-smtp', admin, wrap(async (req, res) => {
+app.post('/api/settings/test-smtp', superOnly, wrap(async (req, res) => {
   try { await sendTest(db.getSettings(), req.body?.lang); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 }));
 
-app.post('/api/providers/test', admin, wrap(async (req, res) => {
+app.post('/api/providers/test', superOnly, wrap(async (req, res) => {
   const { provider, symbol } = req.body || {};
   const p = PROVIDERS[provider];
   if (!p) throw bad('err.provider');

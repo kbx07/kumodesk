@@ -471,8 +471,9 @@ export const countAlertsAfter = (id, userId) => db.prepare('SELECT COUNT(*) n FR
 export const listAlerts = (limit, userId) => db.prepare('SELECT * FROM alerts WHERE user_id IS NULL OR user_id = ? ORDER BY id DESC LIMIT ?').all(userId, limit);
 
 // ---------- users and sessions ----------
-const USERS = 'SELECT u.*, EXISTS(SELECT 1 FROM invites i WHERE i.user_id = u.id) AS invited FROM users u';
-const pubUser = (u) => u && ({ id: u.id, username: u.username, role: u.role, email: u.email || '', created: u.created, lang: u.lang || null, invited: !!u.invited,
+// the first account (the one that set the server up) is the super administrator
+const USERS = 'SELECT u.*, EXISTS(SELECT 1 FROM invites i WHERE i.user_id = u.id) AS invited, (u.id = (SELECT MIN(id) FROM users)) AS super FROM users u';
+const pubUser = (u) => u && ({ id: u.id, username: u.username, role: u.role, email: u.email || '', created: u.created, lang: u.lang || null, invited: !!u.invited, super: !!u.super,
   twofa: { enabled: !!u.totp_enabled, required: !!u.totp_required, recoveryLeft: safeJson(u.recovery, []).length } });
 export const countUsers = () => db.prepare('SELECT COUNT(*) n FROM users').get().n;
 export const countAdmins = () => db.prepare("SELECT COUNT(*) n FROM users WHERE role = 'admin'").get().n;

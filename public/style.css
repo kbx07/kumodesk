@@ -564,3 +564,4 @@ dialog.lightbox img { display: block; max-width: 90vw; max-height: 78vh; border-
 .authform .btn + .btn { margin-top: -4px; }
 .codebox { display: grid; gap: 10px; }
 .codebox[hidden] { display: none; }
+.dot.off { background: var(--zero); }
