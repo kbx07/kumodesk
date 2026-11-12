@@ -64,10 +64,13 @@ function applyLook() {
   const d = $('#decor'); d.replaceChildren();
   const img = (slot) => (lookCfg.custom?.[slot] ? `/api/auth/theme/${slot}?v=${lookCfg.custom[slot].v}` : null);
   d.style.backgroundImage = th === 'custom' && img('bg') ? `url(${img('bg')})` : '';
-  if (th === 'anime' || th === 'cosplay') {
-    d.append(h('div', { class: 'fig left', html: FIG[th] }), h('div', { class: 'fig right', html: FIG[th] }));
-    const bits = th === 'anime' ? ['petal', 'petal', 'petal', 'petal', 'petal', 'petal', 'spark', 'spark', 'word:ドキドキ', 'word:キラキラ', 'petal', 'petal']
-      : ['spark', 'spark', 'spark', 'star', 'star', 'word:ゴゴゴ', 'word:シャキーン', 'spark', 'star', 'spark'];
+  // accent colour: the chosen one, or the theme's own (anime: between pink and violet)
+  const accent = lookCfg.accent || (th === 'anime' ? '#c94fd0' : '');
+  if (accent) { document.body.dataset.accent = '1'; document.body.style.setProperty('--acc', accent); }
+  else { delete document.body.dataset.accent; document.body.style.removeProperty('--acc'); }
+  if (th === 'anime') {
+    d.append(h('div', { class: 'fig left', html: FIG.anime }), h('div', { class: 'fig right', html: FIG.cosplay }));
+    const bits = ['petal', 'spark', 'petal', 'star', 'petal', 'word:ドキドキ', 'spark', 'petal', 'star', 'word:キラキラ', 'petal', 'spark'];
     bits.forEach((b, i) => { const [kind, text] = b.split(':'); d.append(h('i', { class: `bit ${kind}`, style: `left:${(i * 83 + 7) % 100}%;animation-delay:-${(i * 2.7) % 19}s;animation-duration:${14 + (i * 5) % 13}s` }, text || '')); });
   } else if (th === 'custom') {
     if (img('left')) d.append(h('img', { class: 'fig left', src: img('left'), alt: '' }));
@@ -802,7 +805,7 @@ function twofaCard() {
 }
 async function viewSettings() {
   const root = h('div', null, h('div', { class: 'muted' }, T('loading')));
-  const [{ settings: s, providers, classes, loginBgs, appBgs, themes, mailReady }, groups, instruments] = await Promise.all([api('/settings'), api('/groups'), api('/instruments')]);
+  const [{ settings: s, providers, classes, loginBgs, appBgs, themes, accents, mailReady }, groups, instruments] = await Promise.all([api('/settings'), api('/groups'), api('/instruments')]);
   usersCache = null;
   const save = async (patch, msg = T('saved')) => {
     try { await api('/settings', { method: 'PUT', body: patch }); toast(msg); await loadMarket(); return true; }
@@ -854,10 +857,14 @@ async function viewSettings() {
             h('button', { type: 'button', class: 'btn sm danger', onclick: async () => { const r = await api(`/theme/${slot}`, { method: 'DELETE' }); lookCfg = r.appearance; applyLook(); render(); } }, T('delete'))) : null);
         };
         const customBox = h('div', { class: 'form', style: 'margin-top:14px', hidden: ap.theme !== 'custom' }, slotRow('left'), slotRow('right'), slotRow('bg'), h('p', { class: 'hint wide' }, T('theme.custom.hint')));
-        look = h('form', null, h('div', { class: 'k muted small', style: 'margin-bottom:6px' }, T('theme.title')), radios('theme', themes, ap.theme, 'thm'), normalBox, customBox,
+        look = h('form', null, h('div', { class: 'k muted small', style: 'margin-bottom:6px' }, T('theme.title')), radios('theme', themes, ap.theme, 'thm'),
+          h('div', { class: 'k muted small', style: 'margin:14px 0 6px' }, T('look.accent')),
+          h('div', { class: 'swatches' }, ['', ...(accents || [])].map((c) => h('label', { class: 'swatch', title: c || T('look.accent.default') },
+            h('input', { type: 'radio', name: 'accent', value: c, checked: c === (ap.accent || '') }), c ? h('span', { style: `background:${c}` }) : h('span', { class: 'auto' }, 'A')))),
+          h('p', { class: 'hint', style: 'margin:6px 0 0' }, T('look.accent.hint')), normalBox, customBox,
           h('div', { class: 'actions' }, h('button', { class: 'btn primary' }, T('save'))));
         look.onchange = (e) => { if (e.target.name === 'theme') { normalBox.hidden = e.target.value !== 'normal'; customBox.hidden = e.target.value !== 'custom'; } };
-        look.onsubmit = async (e) => { e.preventDefault(); const d = formData(look); if (await save({ appearance: { theme: d.theme, loginBg: d.loginBg || ap.loginBg, appBg: d.appBg || ap.appBg } })) { lookCfg = { ...lookCfg, ...d }; applyLook(); render(); } };
+        look.onsubmit = async (e) => { e.preventDefault(); const d = formData(look); if (await save({ appearance: { theme: d.theme, accent: d.accent || '', loginBg: d.loginBg || ap.loginBg, appBg: d.appBg || ap.appBg } })) { lookCfg = { ...lookCfg, ...d }; applyLook(); render(); } };
       }
       return h('div', null,
         h('div', { class: 'card' }, h('h3', null, T('set.tab.general')), f, h('p', { class: 'hint' }, `KumoDesk ${status?.version || ''}`)),

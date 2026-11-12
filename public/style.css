@@ -340,7 +340,7 @@ body.locked > header, body.locked > main, body.locked > footer { visibility: hid
 
 /* app backgrounds */
 body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; }
-body[data-bg="aurora"]::before, .abg-aurora { background: radial-gradient(at 8% 0%, color-mix(in srgb, #2a78d6 22%, transparent) 0, transparent 45%), radial-gradient(at 96% 10%, color-mix(in srgb, #7b5cf0 18%, transparent) 0, transparent 42%), radial-gradient(at 60% 100%, color-mix(in srgb, #19a37d 14%, transparent) 0, transparent 46%), var(--page); }
+body[data-bg="aurora"]::before, .abg-aurora { background: radial-gradient(at 8% 0%, color-mix(in srgb, var(--accent) 22%, transparent) 0, transparent 45%), radial-gradient(at 96% 10%, color-mix(in srgb, #7b5cf0 18%, transparent) 0, transparent 42%), radial-gradient(at 60% 100%, color-mix(in srgb, #19a37d 14%, transparent) 0, transparent 46%), var(--page); }
 body[data-bg="grid"]::before, .abg-grid { background-color: var(--page); background-image: radial-gradient(color-mix(in srgb, var(--ink) 14%, transparent) 1px, transparent 1.4px); background-size: 22px 22px; }
 body[data-bg="midnight"]::before, .abg-midnight { background: linear-gradient(160deg, color-mix(in srgb, #14254d 70%, var(--page)) 0%, var(--page) 48%, color-mix(in srgb, #000 55%, var(--page)) 100%); }
 .abg-default { background: var(--page); }
@@ -479,14 +479,14 @@ body.locked .decor { z-index: 101; }
 .decor img.fig { opacity: 1; object-fit: contain; max-width: 24vw; } .decor img.fig.right { transform: none; }
 @media (max-width: 1100px) { .decor .fig { display: none; } }
 .bit { position: absolute; top: -8%; display: block; opacity: .55; animation: fall linear infinite; font-style: normal; }
-.bit.petal { width: 14px; height: 10px; background: #ffb3cf; border-radius: 80% 0 80% 0; }
+.bit.petal { width: 14px; height: 10px; background: color-mix(in srgb, var(--theme-a) 65%, #ffffff); border-radius: 80% 0 80% 0; }
 .bit.spark::before { content: "✦"; color: var(--theme-a); font-size: 15px; }
 .bit.star::before { content: "✧"; color: var(--theme-b); font-size: 18px; }
 .bit.word { font-weight: 800; font-size: 15px; color: var(--theme-a); opacity: .32; writing-mode: vertical-rl; }
 @keyframes fall { 0% { transform: translate(0, -10vh) rotate(0); } 100% { transform: translate(-9vw, 118vh) rotate(420deg); } }
 @media (prefers-reduced-motion: reduce) { .bit { animation: none; top: 30%; } }
 body[data-theme="anime"] { --theme-a: #ff7eb6; --theme-b: #b79cff; --accent: #e8589a; --accent-ink: #ff8fc0; --accent-soft: rgba(232,88,154,.16); }
-body[data-theme="anime"] .decor { color: #ff9ac6; background: radial-gradient(at 12% 8%, rgba(255,126,182,.26) 0, transparent 46%), radial-gradient(at 90% 14%, rgba(183,156,255,.24) 0, transparent 44%), radial-gradient(at 50% 100%, rgba(255,190,120,.16) 0, transparent 50%), var(--page); }
+body[data-theme="anime"] .decor { color: var(--theme-a); background: radial-gradient(at 12% 8%, color-mix(in srgb, var(--theme-a) 26%, transparent) 0, transparent 46%), radial-gradient(at 90% 14%, color-mix(in srgb, var(--theme-b) 24%, transparent) 0, transparent 44%), radial-gradient(at 50% 100%, color-mix(in srgb, var(--accent) 14%, transparent) 0, transparent 50%), var(--page); }
 body[data-theme="cosplay"] { --theme-a: #35e0ff; --theme-b: #ff4fd8; --accent: #b14bff; --accent-ink: #cf8cff; --accent-soft: rgba(177,75,255,.18); }
 body[data-theme="cosplay"] .decor { color: #c06bff; background: linear-gradient(180deg, rgba(53,224,255,.10), transparent 40%), radial-gradient(at 8% 92%, rgba(255,79,216,.24) 0, transparent 44%), radial-gradient(at 94% 88%, rgba(53,224,255,.2) 0, transparent 44%), repeating-linear-gradient(90deg, transparent 0 46px, rgba(255,255,255,.035) 46px 47px), var(--page); }
 body[data-theme="custom"] .decor { background-color: var(--page); }
@@ -574,3 +574,17 @@ dialog.lightbox img { display: block; max-width: 90vw; max-height: 78vh; border-
 .fwhen { font-weight: 400; }
 .periodpick { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; font-weight: 400; }
 .periodpick select { width: auto; height: 28px; font-size: 12px; }
+
+/* Accent colour chosen in the settings: buttons, highlights and the theme's glow follow it. */
+body[data-accent] {
+  --accent: var(--acc); --accent-ink: color-mix(in srgb, var(--acc) 68%, var(--ink)); --accent-soft: color-mix(in srgb, var(--acc) 16%, transparent);
+  --theme-a: color-mix(in srgb, var(--acc) 78%, #ffffff); --theme-b: color-mix(in srgb, var(--acc) 50%, #5aa9ff);
+}
+body[data-accent] .auth { --accent: var(--acc); }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.swatch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.swatch span { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--border); cursor: pointer; }
+.swatch span.auto { background: var(--surface-2); color: var(--muted); font-size: 12px; font-weight: 700; }
+.swatch input:checked + span { box-shadow: 0 0 0 2px var(--ink); }
+.swatch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 3px; }
+[hidden] { display: none !important; }

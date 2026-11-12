@@ -46,7 +46,9 @@ const CLASSES = ['fx', 'metal', 'index', 'commodity', 'crypto', 'stock', 'etf', 
 
 const LOGIN_BGS = ['aurora', 'kumo', 'grid', 'mesh', 'plain'];
 const APP_BGS = ['default', 'aurora', 'grid', 'midnight'];
-const THEMES = ['normal', 'anime', 'cosplay', 'custom'];
+const THEMES = ['normal', 'anime', 'custom'];
+// accent colours offered in Settings → General (all dark enough for white button text)
+const ACCENTS = ['#2b7fff', '#0e94d8', '#0d9488', '#16a34a', '#65a30d', '#d97706', '#ea580c', '#dc2626', '#e8589a', '#c94fd0', '#8b5cf6', '#64748b'];
 const THEME_SLOTS = ['left', 'right', 'bg'];
 const THEME_DIR = path.join(DATA_DIR, 'theme');
 /** Detects an image by its first bytes – neither the header nor the file name is trusted. */
@@ -74,6 +76,8 @@ const log = (req, category, code, params = {}, level = 'info', userId = undefine
 
 // ---------- sign-in ----------
 const appearance = () => db.getSettings().appearance;
+// the former "cosplay" theme was merged into "anime"
+if (db.getSettings().appearance.theme === 'cosplay') db.saveSettings({ appearance: { theme: 'anime' } });
 const loginKey = (req, username) => `${req.socket.remoteAddress}|${String(username || '').toLowerCase()}`;
 app.get('/api/auth/state', wrap((req, res) => {
   res.json({ setup: db.countUsers() === 0, user: auth.currentUser(req), appearance: appearance(), version: VERSION });
@@ -654,7 +658,7 @@ app.get('/api/settings', wrap((req, res) => {
   res.json({
     settings: publicSettings(req.user),
     mailReady: smtpReady(db.getSettings()),
-    loginBgs: LOGIN_BGS, appBgs: APP_BGS, themes: THEMES,
+    loginBgs: LOGIN_BGS, appBgs: APP_BGS, themes: THEMES, accents: ACCENTS,
     providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, name: p.name, needsKey: p.needsKey, daily: !!p.fetchDaily, live: !!p.fetchQuote })),
     classes: CLASSES,
   });
@@ -673,6 +677,7 @@ app.put('/api/settings', wrap((req, res) => {
     if (patch.appearance.loginBg != null && !LOGIN_BGS.includes(patch.appearance.loginBg)) throw bad('err.background');
     if (patch.appearance.appBg != null && !APP_BGS.includes(patch.appearance.appBg)) throw bad('err.background');
     if (patch.appearance.theme != null && !THEMES.includes(patch.appearance.theme)) throw bad('err.background');
+    if (patch.appearance.accent != null && patch.appearance.accent !== '' && !ACCENTS.includes(patch.appearance.accent)) throw bad('err.background');
     delete patch.appearance.custom; // images change only through file upload
   }
   if (patch.risk) for (const k of ['maxTotal', 'maxCurrency', 'maxPosition']) if (patch.risk[k] != null) { const v = Number(patch.risk[k]); if (!(v > 0 && v <= 100)) throw bad('err.riskPct'); patch.risk[k] = v; }
