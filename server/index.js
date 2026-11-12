@@ -369,8 +369,12 @@ app.get('/api/positions/live', wrap(async (req, res) => {
 // ---------- algorithm accuracy ----------
 app.get('/api/signals', wrap((req, res) => {
   const since = new Date(Date.now() - 370 * 86400000).toISOString().slice(0, 10);
-  const list = db.listSignals(since);
-  res.json({ busy: signalsBusy(), through: db.getMeta('signalsThrough'), stats: signalStats(list), recent: list.filter((x) => x.closed).slice(0, 25), open: list.filter((x) => !x.closed).length });
+  const all = db.listSignals(since);
+  // period: signals that ended within the last N days (default two weeks)
+  const days = [14, 30, 91, 182, 365].includes(Number(req.query.days)) ? Number(req.query.days) : 14;
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const list = all.filter((x) => !x.closed || x.closed >= cutoff);
+  res.json({ busy: signalsBusy(), through: db.getMeta('signalsThrough'), days, from: cutoff, stats: signalStats(list), recent: list.filter((x) => x.closed).slice(0, 25), open: all.filter((x) => !x.closed).length });
 }));
 app.post('/api/signals/rebuild', admin, wrap((req, res) => {
   if (signalsBusy()) throw Object.assign(new Error('BUSY'), { status: 409 });

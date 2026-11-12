@@ -659,7 +659,9 @@ async function viewPortfolio() {
   pf.threats.forEach((x) => thr.append(h('div', { class: 'threat' }, h('span', { class: `lv ${x.level}` }, T('level.' + x.level)), h('span', null, T(x.code, x.params)))));
 
   try { root.append(await shareBox()); } catch { /* the sharing section is optional */ }
-  const accuracy = h('div'); api('/signals').then((d) => accuracy.replaceWith(accuracyCard(d))).catch(() => {});
+  const accuracy = h('div');
+  const loadAccuracy = () => api(`/signals?days=${accDays}`).then((d) => accuracy.replaceChildren(accuracyCard(d, (v) => { accDays = v; loadAccuracy(); }))).catch(() => {});
+  loadAccuracy();
   if (pf.positions.length) root.append(positionsCard(pf.positions, false));
   root.append(h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h3', null, T('pf.positions'),
       pf.positions.length ? h('button', { class: 'btn sm', onclick: async () => { try { await api('/positions/check', { method: 'POST' }); wasRunning = true; poll(); } catch (e) { toast(e.message === 'BUSY' ? T('refresh.busy') : TE(e.message), true); } } }, T('h4.checkNow')) : null), table),
@@ -670,10 +672,12 @@ async function viewPortfolio() {
 }
 
 /** Algorithm accuracy: how often a "green light" ended in profit. */
-function accuracyCard(d) {
+function accuracyCard(d, onPeriod) {
   const st = d.stats, a = st.all;
-  const card = h('div', { class: 'card' }, h('h3', null, T('acc2.title'), h('span', { class: 'muted small' }, d.busy ? T('acc2.busy') : st.from ? T('acc2.period', { from: st.from, to: d.through || '–' }) : '')));
-  if (!a.n) { card.append(h('p', { class: 'muted' }, T(d.busy ? 'acc2.busy.text' : 'acc2.none'))); return card; }
+  const card = h('div', { class: 'card' }, h('h3', null, T('acc2.title'), h('span', { class: 'sharerow' },
+    h('span', { class: 'muted small' }, d.busy ? T('acc2.busy') : T('acc2.period', { from: d.from, to: d.through || '–' })),
+    h('label', { class: 'periodpick' }, h('select', { 'aria-label': T('acc2.range'), onchange: (e) => onPeriod(Number(e.target.value)) }, [14, 30, 91, 182, 365].map((v) => h('option', { value: v, selected: v === d.days }, T('acc2.range.' + v)))))))); 
+  if (!a.n) { card.append(h('p', { class: 'muted' }, T(d.busy ? 'acc2.busy.text' : 'acc2.none.period'))); return card; }
   const stat = (k, v, sub, tone) => h('div', { class: 'card tile' }, h('div', { class: 'k' }, tone ? h('span', { class: `dot ${tone}` }) : null, T(k)), h('div', { class: 'v' }, v), h('div', { class: 's' }, sub || ''));
   const tn = (v) => (v > 0 ? 'good' : v < 0 ? 'crit' : '');
   const share = a.n ? (a.wins / a.n) * 100 : 0;
@@ -1223,6 +1227,7 @@ function viewHelp() {
 // ---------- SIGN-IN ----------
 const TEST_SYMBOL = { yahoo: 'EURUSD=X', twelvedata: 'EUR/USD', stooq: 'eurusd', eodhd: 'EURUSD.FOREX' };
 let prefillLogin = '';
+let accDays = 14;      // portfolio: period of the algorithm-accuracy card
 let sigPeriod = 'last'; // dashboard table: which "trade" qualifications to show
 async function showAuth() {
   let st;
