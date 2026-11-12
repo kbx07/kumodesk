@@ -229,7 +229,7 @@ Every TRADE decision is tracked as if entered at the close of its candle with th
 
 ## Themes and appearance
 
-Administrators pick a theme in Settings → General: **Normal** (with a choice of sign-in and app backgrounds), **Anime** (side figures and falling petals and sparks), or **Custom** with your own uploaded images (left, right, background). Every theme has an **accent colour** chosen from a palette – buttons, highlights and the theme's glow follow it.
+Every user chooses their own look in Settings → General: the theme – **Normal** (with a choice of app background), **Anime** (two side figures and drifting petals, sparks, flowers and short Japanese and Korean words) or **Custom** (the Anime look with your own pictures, ideally PNG with a transparent background, standing exactly where the two figures are) – and an **accent colour** from a palette that drives buttons, highlights and the theme's glow. The sign-in screen is the same for everyone and always plain; an administrator picks only its background.
 
 ## Group chat, attachments and push notifications
 

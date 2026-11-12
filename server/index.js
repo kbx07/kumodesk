@@ -49,7 +49,7 @@ const APP_BGS = ['default', 'aurora', 'grid', 'midnight'];
 const THEMES = ['normal', 'anime', 'custom'];
 // accent colours offered in Settings → General (all dark enough for white button text)
 const ACCENTS = ['#2b7fff', '#0e94d8', '#0d9488', '#16a34a', '#65a30d', '#d97706', '#ea580c', '#dc2626', '#e8589a', '#c94fd0', '#8b5cf6', '#64748b'];
-const THEME_SLOTS = ['left', 'right', 'bg'];
+const THEME_SLOTS = ['left', 'right'];
 const THEME_DIR = path.join(DATA_DIR, 'theme');
 /** Detects an image by its first bytes – neither the header nor the file name is trusted. */
 function sniffImage(buf) {
@@ -80,7 +80,9 @@ const appearance = () => db.getSettings().appearance;
 if (db.getSettings().appearance.theme === 'cosplay') db.saveSettings({ appearance: { theme: 'anime' } });
 const loginKey = (req, username) => `${req.socket.remoteAddress}|${String(username || '').toLowerCase()}`;
 app.get('/api/auth/state', wrap((req, res) => {
-  res.json({ setup: db.countUsers() === 0, user: auth.currentUser(req), appearance: appearance(), version: VERSION });
+  const user = auth.currentUser(req);
+  // the sign-in screen is always neutral: only its background is a server setting; the look itself is personal
+  res.json({ setup: db.countUsers() === 0, user, appearance: { loginBg: appearance().loginBg }, look: user ? db.getSettings(user.id).look : null, version: VERSION });
 }));
 app.post('/api/auth/setup', wrap((req, res) => {
   if (db.countUsers() > 0) throw Object.assign(new Error('err.setupDone'), { status: 409 });
@@ -165,13 +167,6 @@ app.post('/api/auth/2fa/recovery', wrap((req, res) => {
 }));
 app.post('/api/auth/2fa/forget-devices', wrap((req, res) => { const u = sessionUser(req); db.forgetDevices(u.id); res.json({ ok: true }); }));
 app.get('/api/auth/2fa/devices', wrap((req, res) => res.json(db.listDevices(sessionUser(req).id))));
-// custom theme images – also visible on the sign-in screen
-app.get('/api/auth/theme/:slot', wrap((req, res) => {
-  const slot = req.params.slot, meta = appearance().custom?.[slot];
-  if (!THEME_SLOTS.includes(slot) || !meta) return res.status(404).end();
-  res.setHeader('Content-Type', meta.type); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Cache-Control', 'private, max-age=86400');
-  fs.createReadStream(path.join(THEME_DIR, slot)).on('error', () => res.status(404).end()).pipe(res);
-}));
 app.post('/api/auth/logout', wrap((req, res) => { const u = auth.currentUser(req); if (u) log(req, 'auth', 'auth.logout', {}, 'info', u.id); auth.endSession(req, res); res.json({ ok: true }); }));
 
 // ---------- version and update ----------
@@ -285,31 +280,39 @@ app.delete('/api/users/:id', admin, wrap((req, res) => {
   if (cur.super) return res.status(403).json({ error: 'err.superProtected' });
   if (cur.role === 'admin' && db.countAdmins() <= 1) throw bad('err.lastAdmin');
   for (const fid of db.filesOfUser(id)) fs.rmSync(path.join(FILES_DIR, String(fid)), { force: true });
+  for (const slot of THEME_SLOTS) fs.rmSync(lookFile(id, slot), { force: true });
   db.deleteUser(id); auth.forgetPresence(id); invalidate();
   log(req, 'admin', 'admin.userDelete', { name: cur.username });
   res.json({ ok: true });
 }));
 
-// ---------- custom theme: image upload ----------
-app.put('/api/theme/:slot', admin, express.raw({ type: () => true, limit: '5mb' }), wrap((req, res) => {
+// ---------- personal look: own side figures for the "custom" theme ----------
+const lookFile = (userId, slot) => path.join(THEME_DIR, `u${userId}-${slot}`);
+const lookOf = (userId) => db.getSettings(userId).look;
+app.get('/api/look/:slot', wrap((req, res) => {
+  const slot = req.params.slot, meta = lookOf(req.user.id).custom?.[slot];
+  if (!THEME_SLOTS.includes(slot) || !meta) return res.status(404).end();
+  res.setHeader('Content-Type', meta.type); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Cache-Control', 'private, max-age=86400');
+  fs.createReadStream(lookFile(req.user.id, slot)).on('error', () => res.status(404).end()).pipe(res);
+}));
+app.put('/api/look/:slot', express.raw({ type: () => true, limit: '5mb' }), wrap((req, res) => {
   const slot = req.params.slot;
   if (!THEME_SLOTS.includes(slot)) throw bad('err.background');
   const type = Buffer.isBuffer(req.body) ? sniffImage(req.body) : null;
   if (!type) throw bad('err.imageType');
   fs.mkdirSync(THEME_DIR, { recursive: true });
-  fs.writeFileSync(path.join(THEME_DIR, slot), req.body);
-  const custom = { ...(appearance().custom || {}), [slot]: { type, v: Date.now() } };
-  db.saveSettings({ appearance: { custom } });
-  res.json({ appearance: appearance() });
+  fs.writeFileSync(lookFile(req.user.id, slot), req.body);
+  const look = lookOf(req.user.id);
+  db.setUserLook(req.user.id, { ...look, custom: { ...(look.custom || {}), [slot]: { type, v: Date.now() } } });
+  res.json({ look: lookOf(req.user.id) });
 }));
-app.delete('/api/theme/:slot', admin, wrap((req, res) => {
+app.delete('/api/look/:slot', wrap((req, res) => {
   const slot = req.params.slot;
   if (!THEME_SLOTS.includes(slot)) throw bad('err.background');
-  fs.rmSync(path.join(THEME_DIR, slot), { force: true });
-  const custom = { ...(appearance().custom || {}) }; delete custom[slot];
-  const all = db.getSettings(); all.appearance.custom = custom;
-  db.replaceSetting('appearance', all.appearance);
-  res.json({ appearance: appearance() });
+  fs.rmSync(lookFile(req.user.id, slot), { force: true });
+  const look = lookOf(req.user.id), custom = { ...(look.custom || {}) }; delete custom[slot];
+  db.setUserLook(req.user.id, { ...look, custom });
+  res.json({ look: lookOf(req.user.id) });
 }));
 
 // ---------- Google: connecting an account for sending mail (OAuth2) ----------
@@ -678,12 +681,16 @@ app.put('/api/settings', wrap((req, res) => {
   if (globalKeys.length && req.user.role !== 'admin') throw Object.assign(new Error('err.adminOnly'), { status: 403 });
   // market data, mail server and notification rules belong to the super administrator
   if (globalKeys.some((k) => ['data', 'smtp', 'notify'].includes(k)) && !req.user.super) throw Object.assign(new Error('err.superOnly'), { status: 403 });
-  if (patch.appearance) {
+  if (patch.appearance) { // server-wide: only the sign-in background
     if (patch.appearance.loginBg != null && !LOGIN_BGS.includes(patch.appearance.loginBg)) throw bad('err.background');
-    if (patch.appearance.appBg != null && !APP_BGS.includes(patch.appearance.appBg)) throw bad('err.background');
-    if (patch.appearance.theme != null && !THEMES.includes(patch.appearance.theme)) throw bad('err.background');
-    if (patch.appearance.accent != null && patch.appearance.accent !== '' && !ACCENTS.includes(patch.appearance.accent)) throw bad('err.background');
-    delete patch.appearance.custom; // images change only through file upload
+    patch.appearance = patch.appearance.loginBg != null ? { loginBg: patch.appearance.loginBg } : {};
+  }
+  if (patch.look) { // personal: theme, accent colour, app background
+    const l = patch.look;
+    if (l.appBg != null && !APP_BGS.includes(l.appBg)) throw bad('err.background');
+    if (l.theme != null && !THEMES.includes(l.theme)) throw bad('err.background');
+    if (l.accent != null && l.accent !== '' && !ACCENTS.includes(l.accent)) throw bad('err.background');
+    delete l.custom; // images change only through file upload
   }
   if (patch.risk) for (const k of ['maxTotal', 'maxCurrency', 'maxPosition']) if (patch.risk[k] != null) { const v = Number(patch.risk[k]); if (!(v > 0 && v <= 100)) throw bad('err.riskPct'); patch.risk[k] = v; }
   if (patch.smtp) {

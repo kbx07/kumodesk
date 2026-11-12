@@ -269,7 +269,7 @@ function deepMerge(base, over) {
 }
 
 /** A user's personal settings (capital, risk limits) layered over the global ones. */
-export const PERSONAL_KEYS = ['capital', 'risk'];
+export const PERSONAL_KEYS = ['capital', 'risk', 'look'];
 
 export function getSettings(userId = null) {
   const rows = db.prepare('SELECT key, value FROM settings').all();
@@ -279,6 +279,8 @@ export function getSettings(userId = null) {
   if (userId) {
     const u = db.prepare('SELECT settings FROM users WHERE id = ?').get(userId);
     const own = u ? safeJson(u.settings, {}) : {};
+    // until a user chooses their own look they keep what the server used before looks became personal
+    if (!own.look) { const a = merged.appearance || {}; merged.look = { ...merged.look, theme: a.theme === 'cosplay' ? 'anime' : (a.theme || 'normal'), accent: a.accent || '', appBg: a.appBg || 'default' }; }
     for (const k of PERSONAL_KEYS) if (own[k]) merged = deepMerge(merged, { [k]: own[k] });
   }
   return merged;
@@ -287,6 +289,14 @@ export function getSettings(userId = null) {
 /** Replaces a whole settings key (no merging) – needed when removing fields. */
 export const replaceSetting = (key, value) => db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, JSON.stringify(value));
 
+/** Stores the user's look as a whole (needed when an image is removed). */
+export function setUserLook(userId, look) {
+  const u = db.prepare('SELECT settings FROM users WHERE id = ?').get(userId);
+  if (!u) return;
+  const cur = safeJson(u.settings, {});
+  cur.look = look;
+  db.prepare('UPDATE users SET settings = ? WHERE id = ?').run(JSON.stringify(cur), userId);
+}
 export function saveUserSettings(userId, patch) {
   const u = db.prepare('SELECT settings FROM users WHERE id = ?').get(userId);
   if (!u) return;

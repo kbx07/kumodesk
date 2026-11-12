@@ -257,6 +257,21 @@ test('server: setup, sign-in, roles, portfolio isolation, sharing, messages', as
   assert.equal((await carol('GET', '/update')).status, 403);
   assert.equal((await carol('GET', '/settings')).body.settings.smtp.host, '');       // mail server hidden from other administrators
   assert.equal((await carol('PUT', '/users/2', { email: 'bob@example.test' })).status, 200); // but they do manage ordinary accounts
+  // look: personal – theme, accent colour and own figures; the sign-in screen learns nothing of it
+  assert.equal((await bob('PUT', '/settings', { look: { theme: 'anime', accent: '#16a34a' } })).status, 200);
+  assert.equal((await bob('GET', '/settings')).body.settings.look.theme, 'anime');
+  assert.equal((await alice('GET', '/settings')).body.settings.look.theme, 'normal');
+  assert.equal((await bob('PUT', '/settings', { look: { accent: '#123456' } })).status, 400);
+  const st0 = (await anon('GET', '/auth/state')).body;
+  assert.equal(st0.look, null); assert.deepEqual(Object.keys(st0.appearance), ['loginBg']);
+  assert.equal((await bob('GET', '/auth/state')).body.look.accent, '#16a34a');
+  const figure = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+  const put = await fetch(base + '/look/left', { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', Cookie: bob.cookie() }, body: figure });
+  assert.equal(put.status, 200); assert.equal((await put.json()).look.custom.left.type, 'image/png');
+  assert.equal((await fetch(base + '/look/left', { headers: { Cookie: bob.cookie() } })).status, 200);
+  assert.equal((await fetch(base + '/look/left', { headers: { Cookie: alice.cookie() } })).status, 404); // someone else's picture
+  assert.equal((await fetch(base + '/look/left')).status, 401);
+  assert.equal((await bob('DELETE', '/look/left')).body.look.custom.left, undefined);
   // API keys are write-only: the page learns only whether one is stored
   assert.equal((await alice('PUT', '/settings', { data: { eodhdKey: 'secret-key-1' } })).status, 200);
   const d1 = (await alice('GET', '/settings')).body.settings.data;

@@ -236,7 +236,8 @@ export const DEFAULT_SETTINGS = {
   h4: { enabled: true, delay_min: 5 }, // open-position analysis every 4 hours
   risk: { maxTotal: 5, maxCurrency: 2.5, maxPosition: 1.5 },
   capital: { start: 0, currency: 'EUR', defaultRisk: 1 },
-  appearance: { theme: 'normal', accent: '', loginBg: 'aurora', appBg: 'default', custom: {} },
+  appearance: { theme: 'normal', accent: '', loginBg: 'aurora', appBg: 'default', custom: {} }, // server-wide: only loginBg is still used
+  look: { theme: 'normal', accent: '', appBg: 'default', custom: {} },                           // personal: theme, accent colour, own figures
   notify: {
     mode: 'report',             // off | alerts | report
     minGrade: 'B',

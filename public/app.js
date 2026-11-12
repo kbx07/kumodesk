@@ -51,31 +51,34 @@ async function api(path, opts = {}) {
   return data;
 }
 let me = null;            // signed-in user
-let lookCfg = { theme: 'normal', loginBg: 'aurora', appBg: 'default', custom: {} };
+let lookCfg = { theme: 'normal', accent: '', appBg: 'default', custom: {} }; // the signed-in user's own look
+let loginBg = 'aurora';                                                     // sign-in screen background (server setting)
 // Theme side figures: simple paper-cut style silhouettes (clothed, no detail).
 const FIG = {
   anime: '<svg viewBox="0 0 200 420" xmlns="http://www.w3.org/2000/svg"><g fill="currentColor"><path d="M62 70c-16 30-22 78-10 120l14-4c-6-34-4-70 6-98zM138 70c16 30 22 78 10 120l-14-4c6-34 4-70-6-98z" opacity=".75"/><circle cx="100" cy="62" r="34"/><path d="M66 58c2-30 22-44 36-44s34 12 34 44c-10-16-22-22-36-22s-26 8-34 22z" opacity=".55"/><path d="M78 100h44l14 96H64z"/><path d="M58 196h84l22 84H36z" opacity=".85"/><path d="M74 280h20l-4 118H78zM106 280h20l-4 118h-12z"/><path d="M70 398h26v12H66zM104 398h26l4 12h-30z"/><path d="M124 112l34 46-10 8-30-36zM76 112l-30 52 10 6 26-40z" opacity=".9"/></g><path d="M150 150l22-30 6 4-20 32z" fill="currentColor" opacity=".6"/></svg>',
   cosplay: '<svg viewBox="0 0 200 420" xmlns="http://www.w3.org/2000/svg"><g fill="currentColor"><path d="M70 36l-6-30 28 18zM130 36l6-30-28 18z"/><circle cx="100" cy="62" r="32"/><path d="M68 64c0-22 14-40 32-40s32 18 32 40c-8-10-20-16-32-16s-24 6-32 16z" opacity=".55"/><path d="M60 100h80l40 190c-26 10-54-6-80-6s-54 16-80 6z" opacity=".45"/><path d="M78 100h44l10 100H68z"/><path d="M68 200h64l10 70H58z" opacity=".9"/><path d="M76 270h18l-2 126H80zM106 270h18l-4 126h-12z"/><path d="M68 396h28v14H64zM104 396h28l4 14h-32z"/><path d="M124 112l40-34 6 8-34 44z" opacity=".9"/></g><path d="M166 30l6 190h-6z" fill="currentColor"/><path d="M169 6l12 20-12 14-12-14z" fill="currentColor" opacity=".8"/></svg>',
 };
-/** Applies the theme, background and decorations (falling petals, sparks, manga lettering, side figures). */
-function applyLook() {
-  const th = lookCfg.theme || 'normal';
-  document.body.dataset.theme = th; document.body.dataset.bg = th === 'normal' ? lookCfg.appBg : 'theme';
+// Things that drift down in the anime look: petals, sparks, flowers, hearts and short Japanese / Korean words.
+const BITS = ['petal', 'spark', 'petal', 'word:ドキドキ', 'star', 'flower', 'petal', 'word:반짝', 'heart', 'spark', 'word:キラキラ', 'petal', 'glyph:桜', 'star', 'word:두근두근',
+  'flower', 'petal', 'glyph:夢', 'spark', 'word:ふわふわ', 'heart', 'glyph:별', 'petal', 'star', 'glyph:星', 'flower', 'word:사랑', 'petal'];
+/**
+ * Applies the look: theme, accent colour, background and decorations.
+ * `neutral` is for the sign-in screens, which always stay plain whatever the user chose.
+ * The "custom" theme is the anime look with the user's own pictures in place of the two side figures.
+ */
+function applyLook(neutral = false) {
+  const cfg = neutral ? { theme: 'normal', accent: '', appBg: 'default', custom: {} } : lookCfg;
+  const th = cfg.theme || 'normal', anime = th === 'anime' || th === 'custom';
+  document.body.dataset.theme = anime ? 'anime' : 'normal'; document.body.dataset.bg = anime ? 'theme' : cfg.appBg;
   const d = $('#decor'); d.replaceChildren();
-  const img = (slot) => (lookCfg.custom?.[slot] ? `/api/auth/theme/${slot}?v=${lookCfg.custom[slot].v}` : null);
-  d.style.backgroundImage = th === 'custom' && img('bg') ? `url(${img('bg')})` : '';
-  // accent colour: the chosen one, or the theme's own (anime: between pink and violet)
-  const accent = lookCfg.accent || (th === 'anime' ? '#c94fd0' : '');
+  const accent = cfg.accent || (anime ? '#c94fd0' : ''); // anime default: between pink and violet
   if (accent) { document.body.dataset.accent = '1'; document.body.style.setProperty('--acc', accent); }
   else { delete document.body.dataset.accent; document.body.style.removeProperty('--acc'); }
-  if (th === 'anime') {
-    d.append(h('div', { class: 'fig left', html: FIG.anime }), h('div', { class: 'fig right', html: FIG.cosplay }));
-    const bits = ['petal', 'spark', 'petal', 'star', 'petal', 'word:ドキドキ', 'spark', 'petal', 'star', 'word:キラキラ', 'petal', 'spark'];
-    bits.forEach((b, i) => { const [kind, text] = b.split(':'); d.append(h('i', { class: `bit ${kind}`, style: `left:${(i * 83 + 7) % 100}%;animation-delay:-${(i * 2.7) % 19}s;animation-duration:${14 + (i * 5) % 13}s` }, text || '')); });
-  } else if (th === 'custom') {
-    if (img('left')) d.append(h('img', { class: 'fig left', src: img('left'), alt: '' }));
-    if (img('right')) d.append(h('img', { class: 'fig right', src: img('right'), alt: '' }));
-  }
+  if (!anime) return;
+  const own = (slot) => (th === 'custom' && cfg.custom?.[slot] ? `/api/look/${slot}?v=${cfg.custom[slot].v}` : null);
+  const fig = (slot, svg) => (own(slot) ? h('img', { class: `fig ${slot}`, src: own(slot), alt: '' }) : h('div', { class: `fig ${slot}`, html: svg }));
+  d.append(fig('left', FIG.anime), fig('right', FIG.cosplay));
+  BITS.forEach((b, i) => { const [kind, text] = b.split(':'); d.append(h('i', { class: `bit ${kind}`, style: `left:${(i * 61 + 5) % 100}%;animation-delay:-${(i * 2.7) % 23}s;animation-duration:${15 + (i * 5) % 14}s` }, text || '')); });
 }
 const isAdmin = () => me?.role === 'admin';
 const isSuper = () => !!me?.super; // the first account: updates, market data, notifications, logs
@@ -843,40 +846,44 @@ async function viewSettings() {
         catch (ex) { toast(TE(ex.message), true); }
       };
       // appearance: theme, backgrounds and custom-theme images (for everyone)
-      let look = null;
+      // appearance: everyone has their own theme, accent colour and side figures
+      const lk = s.look;
+      const preview = (kind, id) => h('span', { class: `bgprev ${kind}-${id}` }, kind === 'lbg' ? h('span', { class: 'authbg' }, h('i'), h('i'), h('i')) : null);
+      const radios = (name, list, cur, kind) => h('div', { class: 'bgpick' }, list.map((id) => h('label', { class: 'bgopt' }, h('input', { type: 'radio', name, value: id, checked: id === cur }), preview(kind, id), h('span', null, T((kind === 'thm' ? 'theme.' : 'bg.') + id)))));
+      const normalBox = h('div', { hidden: lk.theme !== 'normal' }, h('div', { class: 'k muted small', style: 'margin:14px 0 6px' }, T('look.appBg')), radios('appBg', appBgs, lk.appBg, 'abg'));
+      const slotRow = (slot) => {
+        const has = lk.custom?.[slot];
+        const file = h('input', { type: 'file', accept: 'image/png,image/webp,image/gif,image/jpeg', style: 'height:auto;padding:5px', onchange: async (e) => {
+          const fl = e.target.files[0]; if (!fl) return;
+          if (fl.size > 5 * 1024 * 1024) { toast(T('err.fileTooBig'), true); return; }
+          try { const r = await fetch(`/api/look/${slot}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: fl }); const dd = await r.json(); if (!r.ok) throw new Error(dd.error); lookCfg = dd.look; applyLook(); toast(T('saved')); render(); }
+          catch (ex) { toast(TE(ex.message), true); }
+        } });
+        return h('label', null, T('theme.slot.' + slot), file, has ? h('span', { class: 'sharerow' }, h('img', { src: `/api/look/${slot}?v=${has.v}`, alt: '', style: 'height:44px;border-radius:4px' }),
+          h('button', { type: 'button', class: 'btn sm danger', onclick: async () => { const r = await api(`/look/${slot}`, { method: 'DELETE' }); lookCfg = r.look; applyLook(); render(); } }, T('delete'))) : null);
+      };
+      const customBox = h('div', { class: 'form', style: 'margin-top:14px', hidden: lk.theme !== 'custom' }, slotRow('left'), slotRow('right'), h('p', { class: 'hint wide' }, T('theme.custom.hint')));
+      const look = h('form', null, h('div', { class: 'k muted small', style: 'margin-bottom:6px' }, T('theme.title')), radios('theme', themes, lk.theme, 'thm'),
+        h('div', { class: 'k muted small', style: 'margin:14px 0 6px' }, T('look.accent')),
+        h('div', { class: 'swatches' }, ['', ...(accents || [])].map((c) => h('label', { class: 'swatch', title: c || T('look.accent.default') },
+          h('input', { type: 'radio', name: 'accent', value: c, checked: c === (lk.accent || '') }), c ? h('span', { style: `background:${c}` }) : h('span', { class: 'auto' }, 'A')))),
+        h('p', { class: 'hint', style: 'margin:6px 0 0' }, T('look.accent.hint')), normalBox, customBox,
+        h('div', { class: 'actions' }, h('button', { class: 'btn primary' }, T('save'))));
+      look.onchange = (e) => { if (e.target.name === 'theme') { normalBox.hidden = e.target.value !== 'normal'; customBox.hidden = e.target.value !== 'custom'; } };
+      look.onsubmit = async (e) => { e.preventDefault(); const d = formData(look); const patch = { theme: d.theme, accent: d.accent || '', appBg: d.appBg || lk.appBg }; if (await save({ look: patch })) { lookCfg = { ...lookCfg, ...patch }; applyLook(); render(); } };
+      // the sign-in screen is the same for everyone and always plain; an administrator picks its background
+      let signin = null;
       if (isAdmin()) {
-        const ap = s.appearance;
-        const preview = (kind, id) => h('span', { class: `bgprev ${kind}-${id}` }, kind === 'lbg' ? h('span', { class: 'authbg' }, h('i'), h('i'), h('i')) : null);
-        const radios = (name, list, cur, kind) => h('div', { class: 'bgpick' }, list.map((id) => h('label', { class: 'bgopt' }, h('input', { type: 'radio', name, value: id, checked: id === cur }), preview(kind, id), h('span', null, T((kind === 'thm' ? 'theme.' : 'bg.') + id)))));
-        const normalBox = h('div', { hidden: ap.theme !== 'normal' }, h('div', { class: 'k muted small', style: 'margin:14px 0 6px' }, T('look.loginBg')), radios('loginBg', loginBgs, ap.loginBg, 'lbg'),
-          h('div', { class: 'k muted small', style: 'margin:14px 0 6px' }, T('look.appBg')), radios('appBg', appBgs, ap.appBg, 'abg'));
-        const slotRow = (slot) => {
-          const has = ap.custom?.[slot];
-          const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', style: 'height:auto;padding:5px', onchange: async (e) => {
-            const fl = e.target.files[0]; if (!fl) return;
-            if (fl.size > 5 * 1024 * 1024) { toast(T('err.fileTooBig'), true); return; }
-            try { const r = await fetch(`/api/theme/${slot}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: fl }); const dd = await r.json(); if (!r.ok) throw new Error(dd.error); lookCfg = dd.appearance; applyLook(); toast(T('saved')); render(); }
-            catch (ex) { toast(TE(ex.message), true); }
-          } });
-          return h('label', null, T('theme.slot.' + slot), file, has ? h('span', { class: 'sharerow' }, h('img', { src: `/api/auth/theme/${slot}?v=${has.v}`, alt: '', style: 'height:44px;border-radius:4px' }),
-            h('button', { type: 'button', class: 'btn sm danger', onclick: async () => { const r = await api(`/theme/${slot}`, { method: 'DELETE' }); lookCfg = r.appearance; applyLook(); render(); } }, T('delete'))) : null);
-        };
-        const customBox = h('div', { class: 'form', style: 'margin-top:14px', hidden: ap.theme !== 'custom' }, slotRow('left'), slotRow('right'), slotRow('bg'), h('p', { class: 'hint wide' }, T('theme.custom.hint')));
-        look = h('form', null, h('div', { class: 'k muted small', style: 'margin-bottom:6px' }, T('theme.title')), radios('theme', themes, ap.theme, 'thm'),
-          h('div', { class: 'k muted small', style: 'margin:14px 0 6px' }, T('look.accent')),
-          h('div', { class: 'swatches' }, ['', ...(accents || [])].map((c) => h('label', { class: 'swatch', title: c || T('look.accent.default') },
-            h('input', { type: 'radio', name: 'accent', value: c, checked: c === (ap.accent || '') }), c ? h('span', { style: `background:${c}` }) : h('span', { class: 'auto' }, 'A')))),
-          h('p', { class: 'hint', style: 'margin:6px 0 0' }, T('look.accent.hint')), normalBox, customBox,
-          h('div', { class: 'actions' }, h('button', { class: 'btn primary' }, T('save'))));
-        look.onchange = (e) => { if (e.target.name === 'theme') { normalBox.hidden = e.target.value !== 'normal'; customBox.hidden = e.target.value !== 'custom'; } };
-        look.onsubmit = async (e) => { e.preventDefault(); const d = formData(look); if (await save({ appearance: { theme: d.theme, accent: d.accent || '', loginBg: d.loginBg || ap.loginBg, appBg: d.appBg || ap.appBg } })) { lookCfg = { ...lookCfg, ...d }; applyLook(); render(); } };
+        signin = h('form', null, radios('loginBg', loginBgs, s.appearance.loginBg, 'lbg'), h('div', { class: 'actions' }, h('button', { class: 'btn primary' }, T('save'))));
+        signin.onsubmit = async (e) => { e.preventDefault(); const d = formData(signin); if (await save({ appearance: { loginBg: d.loginBg } })) { loginBg = d.loginBg; render(); } };
       }
       return h('div', null,
         h('div', { class: 'card' }, h('h3', null, T('set.tab.general')), f, h('p', { class: 'hint' }, `KumoDesk ${status?.version || ''}`)),
         h('div', { class: 'card section-gap' }, h('h3', null, T('acc.title'), h('span', { class: 'muted small' }, T(me.super ? 'user.role.super' : 'user.role.' + me.role))), acc),
         twofaCard(),
         pushCard(),
-        look ? h('div', { class: 'card section-gap' }, h('h3', null, T('look.title')), look, h('p', { class: 'hint' }, T('look.hint'))) : '');
+        h('div', { class: 'card section-gap' }, h('h3', null, T('look.title')), look, h('p', { class: 'hint' }, T('look.personal'))),
+        signin ? h('div', { class: 'card section-gap' }, h('h3', null, T('look.loginBg')), signin, h('p', { class: 'hint' }, T('look.hint'))) : '');
     },
     logs() {
       const box = h('div', { class: 'card' });
@@ -1232,9 +1239,10 @@ let accDays = 14;      // portfolio: period of the algorithm-accuracy card
 let sigPeriod = 'last'; // dashboard table: which "trade" qualifications to show
 async function showAuth() {
   let st;
-  try { st = await api('/auth/state'); } catch { st = { setup: false, user: null, appearance: lookCfg }; }
-  lookCfg = st.appearance || lookCfg;
-  applyLook();
+  try { st = await api('/auth/state'); } catch { st = { setup: false, user: null, appearance: { loginBg } }; }
+  loginBg = st.appearance?.loginBg || loginBg;
+  if (st.look) lookCfg = st.look;
+  applyLook(!(st.user && !(st.user.twofa?.required && !st.user.twofa?.enabled))); // sign-in screens stay plain
   if (st.user) { me = st.user; if (needEnrol()) { showEnrol(); return false; } $('#auth').hidden = true; document.body.classList.remove('locked'); return true; }
   const setup = st.setup;
   const inviteToken = /^#\/invite\/([\w-]{20,})$/.exec(location.hash)?.[1];
@@ -1284,7 +1292,7 @@ async function showAuth() {
   const langSel = h('select', { class: 'lang', 'aria-label': 'Language', onchange: (e) => { langPref = e.target.value; store.set('kd.lang', langPref); lang = langPref === 'auto' ? detectLang(navigator.languages || [navigator.language]) : resolveLang(langPref); showAuth(); } },
     ['auto', 'pl', 'de', 'en'].map((l) => h('option', { value: l, selected: l === langPref }, l === 'auto' ? 'Auto' : t(l, 'lang.' + l))));
   const el = $('#auth');
-  el.className = `auth lbg-${(lookCfg.theme || 'normal') === 'normal' ? lookCfg.loginBg : 'theme'}`;
+  el.className = `auth lbg-${loginBg}`;
   el.replaceChildren(
     h('div', { class: 'authbg', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')),
     h('div', { class: 'authcard' },
@@ -1301,7 +1309,7 @@ async function showInvite(token, st) {
   const el = $('#auth');
   const leave = () => { history.replaceState(null, '', location.pathname + '#/'); };
   const card = (...kids) => {
-    el.className = `auth lbg-${(lookCfg.theme || 'normal') === 'normal' ? lookCfg.loginBg : 'theme'}`;
+    el.className = `auth lbg-${loginBg}`;
     el.replaceChildren(h('div', { class: 'authbg', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')),
       h('div', { class: 'authcard' }, h('div', { class: 'authbrand' }, h('span', null, 'KumoDesk')), ...kids,
         h('div', { class: 'authfoot' }, h('span', { class: 'muted small' }, st.version ? `v${st.version}` : ''))));
@@ -1371,7 +1379,7 @@ function twofaSetup({ password = null, onDone, withRemember = true }) {
 /** Mandatory 2FA setup right after the first sign-in to a new account. */
 function showEnrol() {
   const el = $('#auth');
-  el.className = `auth lbg-${(lookCfg.theme || 'normal') === 'normal' ? lookCfg.loginBg : 'theme'}`;
+  el.className = `auth lbg-${loginBg}`;
   el.replaceChildren(h('div', { class: 'authbg', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')),
     h('div', { class: 'authcard' }, h('h1', null, T('twofa.setup.title')), h('p', { class: 'muted' }, T('twofa.setup.sub')),
       twofaSetup({ onDone: () => { el.hidden = true; document.body.classList.remove('locked'); startApp(); } }),
@@ -1675,6 +1683,7 @@ async function startApp() {
     const [, st, cfg] = await Promise.all([loadMarket(), api('/status'), api('/settings')]);
     status = st; wasRunning = st.job.running;
     capitalCfg = cfg.settings.capital;
+    lookCfg = cfg.settings.look; applyLook(); // the user's own look, once signed in
     api('/capital').then((c) => { currentEquity = c.stats.equity; }).catch(() => {});
     // first launch: e-mail language = browser language
     if (isSuper() && !cfg.settings.notify.lang) api('/settings', { method: 'PUT', body: { notify: { lang } } }).catch(() => {});

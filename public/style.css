@@ -476,7 +476,9 @@ body.locked .decor { z-index: 101; }
 .decor .fig { position: absolute; bottom: 0; height: min(62vh, 520px); width: auto; opacity: .5; }
 .decor .fig svg { height: 100%; width: auto; display: block; }
 .decor .fig.left { left: 1.5vw; } .decor .fig.right { right: 1.5vw; transform: scaleX(-1); }
-.decor img.fig { opacity: 1; object-fit: contain; max-width: 24vw; } .decor img.fig.right { transform: none; }
+/* own pictures sit exactly where the built-in figures stand: same height, anchor, shading and glow */
+.decor img.fig { object-fit: contain; object-position: bottom; max-width: 26vw; } .decor img.fig.right { transform: none; }
+.decor .fig { filter: drop-shadow(0 0 22px color-mix(in srgb, var(--theme-a) 40%, transparent)); }
 @media (max-width: 1100px) { .decor .fig { display: none; } }
 .bit { position: absolute; top: -8%; display: block; opacity: .55; animation: fall linear infinite; font-style: normal; }
 .bit.petal { width: 14px; height: 10px; background: color-mix(in srgb, var(--theme-a) 65%, #ffffff); border-radius: 80% 0 80% 0; }
@@ -590,3 +592,6 @@ body[data-accent] .auth { --accent: var(--acc); }
 [hidden] { display: none !important; }
 .tablewrap.scrolly { max-height: 420px; overflow-y: auto; }
 .tablewrap.scrolly thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.bit.flower::before { content: "✿"; color: var(--theme-a); font-size: 16px; }
+.bit.heart::before { content: "♡"; color: var(--theme-b); font-size: 15px; }
+.bit.glyph { font-weight: 700; font-size: 17px; color: var(--theme-b); opacity: .3; }
