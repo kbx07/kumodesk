@@ -58,6 +58,54 @@ const FIG = {
   anime: '<svg viewBox="0 0 200 420" xmlns="http://www.w3.org/2000/svg"><g fill="currentColor"><path d="M62 70c-16 30-22 78-10 120l14-4c-6-34-4-70 6-98zM138 70c16 30 22 78 10 120l-14-4c6-34 4-70-6-98z" opacity=".75"/><circle cx="100" cy="62" r="34"/><path d="M66 58c2-30 22-44 36-44s34 12 34 44c-10-16-22-22-36-22s-26 8-34 22z" opacity=".55"/><path d="M78 100h44l14 96H64z"/><path d="M58 196h84l22 84H36z" opacity=".85"/><path d="M74 280h20l-4 118H78zM106 280h20l-4 118h-12z"/><path d="M70 398h26v12H66zM104 398h26l4 12h-30z"/><path d="M124 112l34 46-10 8-30-36zM76 112l-30 52 10 6 26-40z" opacity=".9"/></g><path d="M150 150l22-30 6 4-20 32z" fill="currentColor" opacity=".6"/></svg>',
   cosplay: '<svg viewBox="0 0 200 420" xmlns="http://www.w3.org/2000/svg"><g fill="currentColor"><path d="M70 36l-6-30 28 18zM130 36l6-30-28 18z"/><circle cx="100" cy="62" r="32"/><path d="M68 64c0-22 14-40 32-40s32 18 32 40c-8-10-20-16-32-16s-24 6-32 16z" opacity=".55"/><path d="M60 100h80l40 190c-26 10-54-6-80-6s-54 16-80 6z" opacity=".45"/><path d="M78 100h44l10 100H68z"/><path d="M68 200h64l10 70H58z" opacity=".9"/><path d="M76 270h18l-2 126H80zM106 270h18l-4 126h-12z"/><path d="M68 396h28v14H64zM104 396h28l4 14h-32z"/><path d="M124 112l40-34 6 8-34 44z" opacity=".9"/></g><path d="M166 30l6 190h-6z" fill="currentColor"/><path d="M169 6l12 20-12 14-12-14z" fill="currentColor" opacity=".8"/></svg>',
 };
+/**
+ * Pictures "with a transparent background" often carry the checkerboard (or a plain backdrop) painted into the
+ * pixels – JPEG cannot be transparent at all. This removes such a backdrop: when the picture has no real
+ * transparency and its border consists of one or two neutral colours, everything of those colours that is
+ * connected to the border becomes transparent. Returns a PNG blob, or the file untouched when nothing applies.
+ */
+async function cutBackdrop(file) {
+  let bmp;
+  try { bmp = await createImageBitmap(file); } catch { return file; }
+  const scale = Math.min(1, 1400 / Math.max(bmp.width, bmp.height));
+  const w = Math.max(1, Math.round(bmp.width * scale)), hh = Math.max(1, Math.round(bmp.height * scale));
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = hh;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bmp, 0, 0, w, hh);
+  const im = ctx.getImageData(0, 0, w, hh), px = im.data;
+  for (let i = 3; i < px.length; i += 4) if (px[i] < 250) return file; // already transparent – leave it alone
+  // the one or two colours that make up the border
+  const buckets = new Map(); let total = 0;
+  const sample = (x, y) => { const i = (y * w + x) * 4, k = (px[i] >> 4) << 8 | (px[i + 1] >> 4) << 4 | (px[i + 2] >> 4); const b = buckets.get(k) || { n: 0, r: 0, g: 0, b: 0 }; b.n++; b.r += px[i]; b.g += px[i + 1]; b.b += px[i + 2]; buckets.set(k, b); total++; };
+  for (let x = 0; x < w; x++) { sample(x, 0); sample(x, hh - 1); }
+  for (let y = 1; y < hh - 1; y++) { sample(0, y); sample(w - 1, y); }
+  const top = [...buckets.values()].sort((a, b) => b.n - a.n).slice(0, 2).map((b) => ({ n: b.n, r: b.r / b.n, g: b.g / b.n, b: b.b / b.n }));
+  const neutral = (c) => Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b) <= 26;
+  const cols = top.filter(neutral);
+  // count border pixels close to those colours (JPEG noise spreads them over neighbouring buckets)
+  const near = (i, tol) => cols.some((c) => Math.abs(px[i] - c.r) <= tol && Math.abs(px[i + 1] - c.g) <= tol && Math.abs(px[i + 2] - c.b) <= tol);
+  if (!cols.length) return file;
+  let hit = 0;
+  for (let x = 0; x < w; x++) { if (near(x * 4, 30)) hit++; if (near(((hh - 1) * w + x) * 4, 30)) hit++; }
+  for (let y = 1; y < hh - 1; y++) { if (near(y * w * 4, 30)) hit++; if (near((y * w + w - 1) * 4, 30)) hit++; }
+  if (hit / total < 0.8) return file; // the border is part of the picture, not a backdrop
+  // flood fill from the border
+  const stack = [];
+  const push = (x, y) => { if (x < 0 || y < 0 || x >= w || y >= hh) return; const i = (y * w + x) * 4; if (px[i + 3] === 0 || !near(i, 30)) return; px[i + 3] = 0; stack.push(x, y); };
+  for (let x = 0; x < w; x++) { push(x, 0); push(x, hh - 1); }
+  for (let y = 0; y < hh; y++) { push(0, y); push(w - 1, y); }
+  while (stack.length) { const y = stack.pop(), x = stack.pop(); push(x + 1, y); push(x - 1, y); push(x, y + 1); push(x, y - 1); }
+  // soften the rim: backdrop-coloured pixels right next to the cut-out fade away
+  const rim = [];
+  for (let y = 0; y < hh; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4;
+    if (px[i + 3] === 0 || !near(i, 60)) continue;
+    if ((x > 0 && px[i - 1] === 0) || (x < w - 1 && px[i + 7] === 0) || (y > 0 && px[i - w * 4 + 3] === 0) || (y < hh - 1 && px[i + w * 4 + 3] === 0)) rim.push(i);
+  }
+  for (const i of rim) px[i + 3] = 90;
+  ctx.putImageData(im, 0, 0);
+  return new Promise((resolve) => cv.toBlob((b) => resolve(b || file), 'image/png'));
+}
 // Things that drift down in the anime look: petals, sparks, flowers, hearts and short Japanese / Korean words.
 const BITS = ['petal', 'spark', 'petal', 'word:ドキドキ', 'star', 'flower', 'petal', 'word:반짝', 'heart', 'spark', 'word:キラキラ', 'petal', 'glyph:桜', 'star', 'word:두근두근',
   'flower', 'petal', 'glyph:夢', 'spark', 'word:ふわふわ', 'heart', 'glyph:별', 'petal', 'star', 'glyph:星', 'flower', 'word:사랑', 'petal'];
@@ -856,7 +904,7 @@ async function viewSettings() {
         const file = h('input', { type: 'file', accept: 'image/png,image/webp,image/gif,image/jpeg', style: 'height:auto;padding:5px', onchange: async (e) => {
           const fl = e.target.files[0]; if (!fl) return;
           if (fl.size > 5 * 1024 * 1024) { toast(T('err.fileTooBig'), true); return; }
-          try { const r = await fetch(`/api/look/${slot}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: fl }); const dd = await r.json(); if (!r.ok) throw new Error(dd.error); lookCfg = dd.look; applyLook(); toast(T('saved')); render(); }
+          try { const body = await cutBackdrop(fl); const r = await fetch(`/api/look/${slot}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body }); const dd = await r.json(); if (!r.ok) throw new Error(dd.error); lookCfg = dd.look; applyLook(); toast(T('saved')); render(); }
           catch (ex) { toast(TE(ex.message), true); }
         } });
         return h('label', null, T('theme.slot.' + slot), file, has ? h('span', { class: 'sharerow' }, h('img', { src: `/api/look/${slot}?v=${has.v}`, alt: '', style: 'height:44px;border-radius:4px' }),
