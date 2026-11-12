@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as db from './db.js';
-import { PROVIDERS, fetchInstrumentQuote, fetchInstrument, fetchInstrumentH4 } from './providers/index.js';
+import { PROVIDERS, fetchInstrumentQuote, fetchInstrument, fetchInstrumentH4, deriveSymbol } from './providers/index.js';
 import { buildLedger, tradeR } from './capital.js';
 import { computeIchimoku } from './ichimoku.js';
 import { getMarket, refresh, checkPositions, invalidate, job } from './runner.js';
@@ -58,10 +58,13 @@ function sniffImage(buf) {
   return null;
 }
 
+const API_KEYS = ['twelvedataKey', 'stooqKey', 'eodhdKey', 'finnhubKey'];
 /** Settings visible to a user: personal ones always, server data (SMTP, keys) for administrators only. */
 function publicSettings(user) {
   const s = db.getSettings(user.id);
-  if (user.super) return { ...s, smtp: { ...s.smtp, pass: '', passSet: !!s.smtp.pass, oauthClientSecret: '', oauthSecretSet: !!s.smtp.oauthClientSecret, oauthRefreshToken: '', oauthConnected: !!s.smtp.oauthRefreshToken } };
+  // API keys and passwords never leave the server: the page only learns whether one is stored
+  const keys = Object.fromEntries(API_KEYS.flatMap((k) => [[k, ''], [`${k}Set`, !!s.data[k]]]));
+  if (user.super) return { ...s, data: { ...s.data, ...keys }, smtp: { ...s.smtp, pass: '', passSet: !!s.smtp.pass, oauthClientSecret: '', oauthSecretSet: !!s.smtp.oauthClientSecret, oauthRefreshToken: '', oauthConnected: !!s.smtp.oauthRefreshToken } };
   return { ...s, smtp: { host: '', port: 587, security: 'starttls', user: '', pass: '', from: '', to: '', passSet: false, auth: 'password', oauthClientId: '', oauthClientSecret: '', oauthRefreshToken: '' }, data: { ...s.data, twelvedataKey: '', stooqKey: '', finnhubKey: '', eodhdKey: '' } };
 }
 
@@ -681,6 +684,12 @@ app.put('/api/settings', wrap((req, res) => {
     if (!patch.smtp.oauthRefreshToken) delete patch.smtp.oauthRefreshToken;
     delete patch.smtp.passSet; delete patch.smtp.clearPass; delete patch.smtp.oauthSecretSet; delete patch.smtp.oauthConnected;
   }
+  if (patch.data) for (const k of API_KEYS) {
+    delete patch.data[`${k}Set`];
+    if (patch.data[k] === '-') patch.data[k] = '';                                   // a single dash removes the stored key
+    else if (!patch.data[k]) delete patch.data[k];                                   // empty = keep what is stored
+    else patch.data[k] = String(patch.data[k]).trim();
+  }
   if (patch.data?.provider && !PROVIDERS[patch.data.provider]?.fetchDaily) throw bad('err.provider');
   if (patch.data?.liveProvider && !PROVIDERS[patch.data.liveProvider]?.fetchQuote) throw bad('err.provider');
   if (patch.data?.liveSeconds != null) patch.data.liveSeconds = Math.max(5, Math.min(600, Math.round(Number(patch.data.liveSeconds)) || 20));
@@ -777,7 +786,7 @@ function validInstrument(b, existing) {
 const MAX_OWN_INSTRUMENTS = 500;
 const canEditInst = (req, inst) => req.user.role === 'admin' || (inst.owner_id != null && inst.owner_id === req.user.id);
 const ownLimit = (req, adding = 1) => { if (req.user.role !== 'admin' && db.countOwnInstruments(req.user.id) + adding > MAX_OWN_INSTRUMENTS) throw bad('err.instLimit'); };
-const instFor = (req) => db.listInstruments(req.user.id).map((i) => ({ ...i, canEdit: canEditInst(req, i) }));
+const instFor = (req) => db.listInstruments(req.user.id).map((i) => ({ ...i, canEdit: canEditInst(req, i), autoSymbols: { eodhd: i.symbols?.eodhd ? null : deriveSymbol('eodhd', i) } }));
 app.get('/api/instruments', wrap((req, res) => res.json(instFor(req))));
 app.post('/api/instruments', wrap((req, res) => {
   const it = validInstrument(req.body || {});

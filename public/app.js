@@ -934,10 +934,10 @@ async function viewSettings() {
       const f = h('form', { class: 'form' },
         field(T('set.provider'), h('select', { name: 'provider' }, provOptions(s.data.provider))),
         field(T('set.fallback'), h('select', { name: 'fallbackProvider' }, provOptions(s.data.fallbackProvider, true, T('set.none')))),
-        field(T('set.tdKey'), h('input', { type: 'text', name: 'twelvedataKey', value: s.data.twelvedataKey, autocomplete: 'off' })),
-        field(T('set.stooqKey'), h('input', { type: 'text', name: 'stooqKey', value: s.data.stooqKey, autocomplete: 'off' })),
-        field(T('set.eodhdKey'), h('input', { type: 'text', name: 'eodhdKey', value: s.data.eodhdKey, autocomplete: 'off' })),
-        field(T('set.finnhubKey'), h('input', { type: 'text', name: 'finnhubKey', value: s.data.finnhubKey, autocomplete: 'off' })),
+        field(T('set.tdKey'), h('input', { type: 'password', name: 'twelvedataKey', value: '', placeholder: s.data.twelvedataKeySet ? T('set.keySaved') : '', autocomplete: 'new-password' }), s.data.twelvedataKeySet ? T('set.keySaved.hint') : null),
+        field(T('set.stooqKey'), h('input', { type: 'password', name: 'stooqKey', value: '', placeholder: s.data.stooqKeySet ? T('set.keySaved') : '', autocomplete: 'new-password' }), s.data.stooqKeySet ? T('set.keySaved.hint') : null),
+        field(T('set.eodhdKey'), h('input', { type: 'password', name: 'eodhdKey', value: '', placeholder: s.data.eodhdKeySet ? T('set.keySaved') : '', autocomplete: 'new-password' }), s.data.eodhdKeySet ? T('set.keySaved.hint') : null),
+        field(T('set.finnhubKey'), h('input', { type: 'password', name: 'finnhubKey', value: '', placeholder: s.data.finnhubKeySet ? T('set.keySaved') : '', autocomplete: 'new-password' }), s.data.finnhubKeySet ? T('set.keySaved.hint') : null),
         field(T('set.liveProvider'), h('select', { name: 'liveProvider' }, provOptions(s.data.liveProvider, true, T('set.liveProvider.same'), 'live')), T('set.liveProvider.hint')),
         field(T('set.liveSeconds'), num('liveSeconds', s.data.liveSeconds, { min: 5, max: 600, step: 1 })),
         field(T('set.years'), num('historyYears', s.data.historyYears, { min: 2, max: 10, step: 1 }), T('set.years.hint')),
@@ -945,9 +945,11 @@ async function viewSettings() {
       f.onsubmit = async (e) => { e.preventDefault(); const d = formData(f); d.historyYears = Number(d.historyYears); d.liveSeconds = Number(d.liveSeconds); if (await save({ data: d })) render(); };
       const tf = h('form', { class: 'form' },
         field(T('set.provider'), h('select', { name: 'provider' }, provOptions(s.data.provider))),
-        field(T('set.symbol'), h('input', { type: 'text', name: 'symbol', value: 'EURUSD=X', required: true })),
+        field(T('set.symbol'), h('input', { type: 'text', name: 'symbol', value: TEST_SYMBOL[s.data.provider] || 'EURUSD=X', required: true }), T('set.symbol.hint')),
         h('div', null, h('button', { class: 'btn' }, T('set.testFetch'))));
       const out = h('p', { class: 'hint' });
+      // every source writes symbols its own way – switch the example with the source
+      tf.elements.provider.onchange = (e) => { tf.elements.symbol.value = TEST_SYMBOL[e.target.value] || ''; };
       tf.onsubmit = async (e) => {
         e.preventDefault(); out.textContent = '…';
         try { const r = await api('/providers/test', { method: 'POST', body: formData(tf) }); out.textContent = T('set.testOk', { n: r.bars, date: r.last?.date, close: fmtPrice(r.last?.c) }); }
@@ -1011,7 +1013,7 @@ async function viewSettings() {
             const prov = i.provider || s.data.provider;
             return h('tr', null, h('td', null, h('b', null, i.id)), h('td', null, instName(i)),
               h('td', null, gname[i.group_id] ? `${gname[i.group_id].name} (${gname[i.group_id].close_time})` : '–'),
-              h('td', { class: 'small' }, `${i.symbols[prov] || '—'}`, h('span', { class: 'name' }, prov)),
+              h('td', { class: 'small' }, `${i.symbols[prov] || i.autoSymbols?.[prov] || '—'}`, h('span', { class: 'name' }, prov)),
               h('td', { class: 'small ' + (i.last_error ? 'err' : 'muted'), title: i.last_error || '' }, i.last_error ? T('ins.error') : fmtTs(i.last_fetch_at)),
               h('td', null, h('input', { type: 'checkbox', checked: i.enabled, onchange: async (e) => { try { await api(`/instruments/${encodeURIComponent(i.id)}`, { method: 'PUT', body: { enabled: e.target.checked } }); await loadMarket(); render(); } catch (err) { toast(TE(err.message), true); } } })),
               h('td', { class: 'nowrap' }, i.canEdit ? [h('button', { class: 'btn sm', onclick: () => instrumentDialog(i) }, T('edit')), ' ',
@@ -1212,6 +1214,7 @@ function viewHelp() {
 }
 
 // ---------- SIGN-IN ----------
+const TEST_SYMBOL = { yahoo: 'EURUSD=X', twelvedata: 'EUR/USD', stooq: 'eurusd', eodhd: 'EURUSD.FOREX' };
 let prefillLogin = '';
 let sigPeriod = 'last'; // dashboard table: which "trade" qualifications to show
 async function showAuth() {

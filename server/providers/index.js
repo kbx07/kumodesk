@@ -207,6 +207,7 @@ const eodhd = {
     if (!key) throw new Error('EODHD API key missing');
     await throttle('eodhd', 300);
     const from = new Date(Date.now() - years * 366 * 86400000).toISOString().slice(0, 10);
+    if (!/^[A-Za-z0-9._-]+\.[A-Za-z]+$/.test(symbol)) throw new Error(`"${symbol}" is not an EODHD symbol – use CODE.EXCHANGE, e.g. EURUSD.FOREX, GSPC.INDX, SAP.XETRA, AAPL.US`);
     const json = JSON.parse(await http(`https://eodhd.com/api/eod/${encodeURIComponent(symbol)}?from=${from}&period=d&fmt=json&api_token=${encodeURIComponent(key)}`, { accept: 'application/json' }));
     if (!Array.isArray(json)) throw new Error(typeof json === 'string' ? json.slice(0, 120) : 'EODHD error');
     return json.map((v) => ({ date: v.date, o: +v.open, h: +v.high, l: +v.low, c: +v.close, v: v.volume != null ? +v.volume : null })).filter((b) => [b.o, b.h, b.l, b.c].every(Number.isFinite));
@@ -223,6 +224,26 @@ const eodhd = {
 };
 
 export const PROVIDERS = { yahoo, twelvedata, stooq, eodhd, finnhub };
+
+const EODHD_EXCHANGE = { DE: 'XETRA', F: 'F', L: 'LSE', PA: 'PA', AS: 'AS', BR: 'BR', MI: 'MI', MC: 'MC', SW: 'SW', VI: 'VI', ST: 'ST', HE: 'HE', CO: 'CO', OL: 'OL', WA: 'WAR', TO: 'TO' };
+/**
+ * A source symbol worked out from what is known about the instrument, for sources whose symbol was not typed in.
+ * EODHD writes symbols as CODE.EXCHANGE (EURUSD.FOREX, GSPC.INDX, SAP.XETRA, AAPL.US, BTC-USD.CC).
+ */
+export function deriveSymbol(pid, inst) {
+  if (pid !== 'eodhd') return null;
+  const y = String(inst.symbols?.yahoo || '');
+  if ((inst.class === 'fx' || inst.class === 'metal') && /^[A-Z]{3}$/.test(inst.base || '') && /^[A-Z]{3}$/.test(inst.quote || '')) return `${inst.base}${inst.quote}.FOREX`;
+  if (/^[A-Z]{6}=X$/.test(y)) return `${y.slice(0, 6)}.FOREX`;
+  if (y.startsWith('^')) return `${y.slice(1)}.INDX`;
+  if (inst.class === 'crypto' && /^[A-Z0-9]+-[A-Z]{3}$/.test(y)) return `${y}.CC`;
+  const m = /^([A-Z0-9-]+)\.([A-Z]{1,2})$/.exec(y);
+  if (m) return inst.class === 'index' ? `${m[1]}.INDX` : EODHD_EXCHANGE[m[2]] ? `${m[1]}.${EODHD_EXCHANGE[m[2]]}` : null;
+  if (/^[A-Z][A-Z0-9-]{0,6}$/.test(y) && (inst.class === 'stock' || inst.class === 'etf')) return `${y}.US`;
+  return null;
+}
+/** The symbol to ask a source for: the one typed in for the instrument, otherwise a derived one. */
+export const symbolFor = (inst, pid) => inst.symbols?.[pid] || deriveSymbol(pid, inst);
 
 /**
  * Tidies candles: sorts, removes duplicate dates, and merges Saturday/Sunday candles
@@ -256,7 +277,7 @@ export async function fetchInstrument(inst, settings) {
     .filter((p, i, a) => p && PROVIDERS[p]?.fetchDaily && a.indexOf(p) === i);
   const errors = [];
   for (const pid of order) {
-    const symbol = inst.symbols?.[pid];
+    const symbol = symbolFor(inst, pid);
     if (!symbol) { errors.push(`${PROVIDERS[pid].name}: no symbol configured`); continue; }
     try {
       const bars = normalizeBars(await PROVIDERS[pid].fetchDaily(symbol, { years: settings.data.historyYears, settings }));
@@ -275,7 +296,7 @@ export async function fetchInstrumentH4(inst, settings) {
     .filter((p, i, a) => p && PROVIDERS[p]?.fetchH4 && a.indexOf(p) === i);
   const errors = [];
   for (const pid of order) {
-    const symbol = inst.symbols?.[pid];
+    const symbol = symbolFor(inst, pid);
     if (!symbol) { errors.push(`${PROVIDERS[pid].name}: no symbol configured`); continue; }
     try {
       const bars = await PROVIDERS[pid].fetchH4(symbol, { settings });
@@ -293,7 +314,7 @@ export async function fetchInstrumentQuote(inst, settings) {
     .filter((p, i, a) => p && PROVIDERS[p]?.fetchQuote && a.indexOf(p) === i);
   const errors = [];
   for (const pid of order) {
-    const symbol = inst.symbols?.[pid];
+    const symbol = symbolFor(inst, pid);
     if (!symbol) continue;
     try { return { provider: pid, ...(await PROVIDERS[pid].fetchQuote(symbol, { settings })) }; }
     catch (e) { errors.push(`${PROVIDERS[pid].name}: ${e.message}`); }

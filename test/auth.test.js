@@ -257,6 +257,14 @@ test('server: setup, sign-in, roles, portfolio isolation, sharing, messages', as
   assert.equal((await carol('GET', '/update')).status, 403);
   assert.equal((await carol('GET', '/settings')).body.settings.smtp.host, '');       // mail server hidden from other administrators
   assert.equal((await carol('PUT', '/users/2', { email: 'bob@example.test' })).status, 200); // but they do manage ordinary accounts
+  // API keys are write-only: the page learns only whether one is stored
+  assert.equal((await alice('PUT', '/settings', { data: { eodhdKey: 'secret-key-1' } })).status, 200);
+  const d1 = (await alice('GET', '/settings')).body.settings.data;
+  assert.equal(d1.eodhdKey, ''); assert.equal(d1.eodhdKeySet, true); assert.equal(d1.twelvedataKeySet, false);
+  await alice('PUT', '/settings', { data: { eodhdKey: '', historyYears: 3 } });       // empty keeps the stored key
+  assert.equal((await alice('GET', '/settings')).body.settings.data.eodhdKeySet, true);
+  await alice('PUT', '/settings', { data: { eodhdKey: '-' } });                        // a dash removes it
+  assert.equal((await alice('GET', '/settings')).body.settings.data.eodhdKeySet, false);
   // presence: who is online and on which device
   const me1 = people.find((u) => u.username === 'carol');
   assert.equal(me1.online, true); assert.equal(me1.devices.length, 1); assert.ok(me1.lastSeen);

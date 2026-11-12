@@ -84,3 +84,18 @@ test('default list: unique identifiers, categories have names', () => {
 });
 
 function pick(a) { return [a.action, a.reason]; }
+
+test('EODHD symbols are derived when none is typed in', async () => {
+  const { deriveSymbol, symbolFor } = await import('../server/providers/index.js');
+  const d = (inst) => deriveSymbol('eodhd', inst);
+  assert.equal(d({ class: 'fx', base: 'EUR', quote: 'USD', symbols: { yahoo: 'EURUSD=X' } }), 'EURUSD.FOREX');
+  assert.equal(d({ class: 'metal', base: 'XAU', quote: 'USD', symbols: { yahoo: 'GC=F' } }), 'XAUUSD.FOREX');
+  assert.equal(d({ class: 'index', symbols: { yahoo: '^GDAXI' } }), 'GDAXI.INDX');
+  assert.equal(d({ class: 'index', symbols: { yahoo: 'WIG20.WA' } }), 'WIG20.INDX');
+  assert.equal(d({ class: 'stock', symbols: { yahoo: 'SAP.DE' } }), 'SAP.XETRA');
+  assert.equal(d({ class: 'stock', symbols: { yahoo: 'AAPL' } }), 'AAPL.US');
+  assert.equal(d({ class: 'crypto', symbols: { yahoo: 'BTC-USD' } }), 'BTC-USD.CC');
+  assert.equal(d({ class: 'other', symbols: { yahoo: 'ZZ=F' } }), null);
+  assert.equal(symbolFor({ class: 'stock', symbols: { yahoo: 'SAP.DE', eodhd: 'SAP.F' } }, 'eodhd'), 'SAP.F'); // a typed symbol wins
+  assert.equal(deriveSymbol('stooq', { class: 'stock', symbols: { yahoo: 'SAP.DE' } }), null);
+});
