@@ -132,7 +132,8 @@ function funnelList(a) {
   card.append(h('div', { class: 'fpath' }, a.funnel.map((st, i) => h('div', { class: `frow f-${st.status}` },
     h('span', { class: 'ficon', title: T('fstatus.' + st.status) }, F_ICON[st.status]),
     h('span', { class: 'fname' }, stageNo(i), ' ', T('funnel.stage.' + st.key)),
-    h('span', { class: 'ftext' }, T(st.code, { ...st.params, ext: st.params?.ext != null ? Number(st.params.ext).toFixed(1) : undefined }))))));
+    h('span', { class: 'ftext' }, T(st.code, { ...st.params, ext: st.params?.ext != null ? Number(st.params.ext).toFixed(1) : undefined })),
+    h('span', { class: 'fsince muted small nowrap', title: T('funnel.since.tip') }, st.since ? T(st.sinceInitial ? 'funnel.sinceInitial' : 'funnel.since', { ts: fmtTs(st.since) }) : '')))));
   return card;
 }
 function sessionsCard(m) {

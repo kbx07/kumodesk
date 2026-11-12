@@ -169,6 +169,9 @@ export function openDb(file) {
   // every user has their own set of instruments: a per-user on/off choice over the shared catalogue
   addColumn('instruments', 'owner_id', 'INTEGER');
   addColumn('snapshots', 'user_id', 'INTEGER');
+  // when each funnel stage of an instrument last changed its status, per user
+  db.exec(`CREATE TABLE IF NOT EXISTS stage_log (user_id INTEGER NOT NULL, instrument_id TEXT NOT NULL, stage TEXT NOT NULL,
+    status TEXT NOT NULL, since TEXT NOT NULL, initial INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, instrument_id, stage))`);
   db.exec('CREATE TABLE IF NOT EXISTS user_instruments (user_id INTEGER NOT NULL, instrument_id TEXT NOT NULL, enabled INTEGER NOT NULL, PRIMARY KEY (user_id, instrument_id))');
   db.exec('CREATE TABLE IF NOT EXISTS invites (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL)');
   addColumn('users', 'recovery', "TEXT NOT NULL DEFAULT '[]'");
@@ -368,6 +371,7 @@ export function deleteInstrument(id) {
   db.prepare('DELETE FROM h1 WHERE instrument_id = ?').run(id);
   db.prepare('DELETE FROM positions WHERE instrument_id = ?').run(id);
   db.prepare('DELETE FROM user_instruments WHERE instrument_id = ?').run(id);
+  db.prepare('DELETE FROM stage_log WHERE instrument_id = ?').run(id);
   db.prepare('DELETE FROM instruments WHERE id = ?').run(id);
 }
 export function markFetch(id, error) {
@@ -525,6 +529,7 @@ export function deleteUser(id) {
   db.prepare('DELETE FROM alerts WHERE user_id = ?').run(id);
   db.prepare('DELETE FROM invites WHERE user_id = ?').run(id);
   db.prepare('DELETE FROM user_instruments WHERE user_id = ?').run(id);
+  db.prepare('DELETE FROM stage_log WHERE user_id = ?').run(id);
   db.prepare('DELETE FROM snapshots WHERE user_id = ?').run(id);
   db.prepare('UPDATE instruments SET owner_id = NULL WHERE owner_id = ?').run(id);
   db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id);
@@ -689,5 +694,24 @@ export const openSignals = () => db.prepare('SELECT * FROM signals WHERE closed 
 export const openSignal = (x) => Number(db.prepare('INSERT INTO signals (instrument_id, dir, grade, opened, entry, stop) VALUES (?,?,?,?,?,?)').run(x.instrument_id, x.dir, x.grade ?? null, x.opened, x.entry, x.stop).lastInsertRowid);
 export const closeSignal = (id, x) => db.prepare('UPDATE signals SET closed = ?, exit = ?, r = ?, reason = ? WHERE id = ?').run(x.closed, x.exit, x.r, x.reason, id);
 export const listSignals = (since) => db.prepare('SELECT * FROM signals WHERE opened >= ? ORDER BY COALESCE(closed, opened) DESC, id DESC').all(since);
+/**
+ * Remembers when every funnel stage of every instrument last changed its status for this user.
+ * The first time a stage is seen its real start is unknown, so it is marked `initial`.
+ */
+export function recordStages(userId, instruments, ts = new Date().toISOString()) {
+  const known = new Map(db.prepare('SELECT instrument_id, stage, status FROM stage_log WHERE user_id = ?').all(userId).map((r) => [`${r.instrument_id}|${r.stage}`, r.status]));
+  const ins = db.prepare('INSERT INTO stage_log (user_id, instrument_id, stage, status, since, initial) VALUES (?,?,?,?,?,1)');
+  const upd = db.prepare('UPDATE stage_log SET status = ?, since = ?, initial = 0 WHERE user_id = ? AND instrument_id = ? AND stage = ?');
+  db.exec('BEGIN');
+  try {
+    for (const a of instruments) for (const st of a.funnel || []) {
+      const prev = known.get(`${a.id}|${st.key}`);
+      if (prev === undefined) ins.run(userId, a.id, st.key, st.status, ts);
+      else if (prev !== st.status) upd.run(st.status, ts, userId, a.id, st.key);
+    }
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+}
+export const stagesOf = (userId, id) => db.prepare('SELECT stage, status, since, initial FROM stage_log WHERE user_id = ? AND instrument_id = ?').all(userId, id);
 export const signalsOf = (id) => db.prepare('SELECT opened AS date, dir, grade FROM signals WHERE instrument_id = ? ORDER BY opened').all(id);
 export function resetSignals() { db.exec('DELETE FROM signals'); db.prepare("DELETE FROM meta WHERE key = 'signalsThrough'").run(); }

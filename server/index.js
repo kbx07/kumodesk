@@ -533,7 +533,11 @@ app.get('/api/instrument/:id', wrap(async (req, res) => {
   const tf = req.query.tf === 'h4' && allH4.length ? 'h4' : 'd1';
   if (view === 'live') { await freshenForLiveView(inst, tf); inst = db.getInstrument(inst.id); }
   const market = getMarket(req.user.id);
-  const analysis = market.instruments.find((a) => a.id === inst.id) || null;
+  let analysis = market.instruments.find((a) => a.id === inst.id) || null;
+  if (analysis?.funnel) { // add when each stage last changed its status
+    const log = Object.fromEntries(db.stagesOf(req.user.id, inst.id).map((r) => [r.stage, r]));
+    analysis = { ...analysis, funnel: analysis.funnel.map((st) => (log[st.key]?.status === st.status ? { ...st, since: log[st.key].since, sinceInitial: !!log[st.key].initial } : st)) };
+  }
   const group = db.getGroup(inst.group_id);
   const settings = db.getSettings();
   let bars, openBar = false;
@@ -920,6 +924,11 @@ app.put('/api/positions/:id', wrap((req, res) => { ownPosition(req); db.savePosi
 app.delete('/api/positions/:id', wrap((req, res) => { const pos = ownPosition(req); db.deletePosition(pos.id); invalidate(); log(req, 'trade', 'trade.delete', { id: pos.instrument_id }); res.json({ ok: true }); }));
 
 // ---------- static files ----------
+// Scripts and styles are served under /v/<version>/, so after an update no browser or proxy cache can keep old files.
+const indexHtml = () => fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8')
+  .replace('src="scheme.js"', `src="/v/${VERSION}/scheme.js"`).replace('href="style.css"', `href="/v/${VERSION}/style.css"`).replace('src="app.js"', `src="/v/${VERSION}/app.js"`);
+app.get(['/', '/index.html'], (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.type('html').send(indexHtml()); });
+app.use('/v/:version', express.static(path.join(ROOT, 'public'), { maxAge: '365d', immutable: true, index: false }));
 app.use(express.static(path.join(ROOT, 'public'), { extensions: ['html'], maxAge: 0 }));
 app.use('/api', (req, res) => res.status(404).json({ error: 'err.notFound' }));
 

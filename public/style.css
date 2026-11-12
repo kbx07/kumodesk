@@ -565,3 +565,6 @@ dialog.lightbox img { display: block; max-width: 90vw; max-height: 78vh; border-
 .codebox { display: grid; gap: 10px; }
 .codebox[hidden] { display: none; }
 .dot.off { background: var(--zero); }
+.frow { grid-template-columns: 24px 150px 1fr auto; }
+.frow .fsince { text-align: right; }
+@media (max-width: 760px) { .frow { grid-template-columns: 24px 1fr; } .frow .fsince { grid-column: 2; text-align: left; } }

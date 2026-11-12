@@ -89,6 +89,7 @@ export async function refresh({ groupId = null, trigger = 'manual' } = {}) {
     for (const u of db.listUsers()) {
       if (groupId != null && !db.listInstruments(u.id).some((i) => i.enabled && i.group_id === groupId)) continue; // nothing of theirs in this group
       const market = getMarket(u.id);
+      db.recordStages(u.id, market.instruments);
       const summary = summarize(market);
       const prev = db.lastSnapshot(u.id);
       const alerts = diffAlerts(prev?.summary, summary, { minGrade: settings.notify.minGrade, groupId });
