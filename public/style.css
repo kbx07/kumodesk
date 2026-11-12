@@ -568,3 +568,7 @@ dialog.lightbox img { display: block; max-width: 90vw; max-height: 78vh; border-
 .frow { grid-template-columns: 24px 150px 1fr auto; }
 .frow .fsince { text-align: right; }
 @media (max-width: 760px) { .frow { grid-template-columns: 24px 1fr; } .frow .fsince { grid-column: 2; text-align: left; } }
+.instpick { font-size: 20px; font-weight: 700; height: auto; width: auto; max-width: 260px; padding: 2px 28px 2px 8px; border: 1px solid transparent; background-color: transparent; cursor: pointer; }
+.instpick:hover, .instpick:focus { border-color: var(--border); background-color: var(--surface); }
+.instpick option, .instpick optgroup { font-size: 13px; font-weight: 400; }
+.fwhen { font-weight: 400; }

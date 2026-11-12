@@ -537,6 +537,14 @@ app.get('/api/instrument/:id', wrap(async (req, res) => {
   if (analysis?.funnel) { // add when each stage last changed its status
     const log = Object.fromEntries(db.stagesOf(req.user.id, inst.id).map((r) => [r.stage, r]));
     analysis = { ...analysis, funnel: analysis.funnel.map((st) => (log[st.key]?.status === st.status ? { ...st, since: log[st.key].since, sinceInitial: !!log[st.key].initial } : st)) };
+    // since when the overall outcome holds ("passed everything" / "stopped at stage X")
+    const want = analysis.failedAt ? `STOP:${analysis.failedAt}` : 'REACHED';
+    if (log.result?.status === want) analysis.resultSince = { ts: log.result.since, initial: !!log.result.initial };
+    // before stage times were recorded: the candle on which "trade" last appeared tells when everything was passed
+    if (!analysis.failedAt && (!analysis.resultSince || analysis.resultSince.initial)) {
+      const last = db.playMarksOf(inst.id).filter((x) => x.dir === analysis.dir).at(-1);
+      if (last) analysis.resultSince = { candle: last.date };
+    }
   }
   const group = db.getGroup(inst.group_id);
   const settings = db.getSettings();
@@ -562,9 +570,13 @@ app.get('/api/instrument/:id', wrap(async (req, res) => {
     cloudA: ich.cloudA.slice(from), cloudB: ich.cloudB.slice(from), // longer by `shift` (future cloud)
   };
   const positions = market.portfolio.positions.filter((p) => p.instrument_id === inst.id);
-  // "green lights" for the chart: the candle that gave the signal; the arrow is drawn on the next one (the entry day)
-  const signals = tf === 'h4' ? [] : db.signalsOf(inst.id);
-  if (tf !== 'h4' && analysis?.signal?.fresh && !signals.some((x) => x.date === analysis.signal.date)) signals.push({ date: analysis.signal.date, dir: analysis.signal.dir, grade: analysis.grade ?? null });
+  // Chart arrows: every candle on which the recommendation turned into "trade"; drawn on the next candle (the entry day).
+  // The stored history ends with the last finished day, so the newest candle is added from the current analysis.
+  const signals = tf === 'h4' ? [] : db.playMarksOf(inst.id);
+  if (tf !== 'h4' && analysis?.ok && analysis.action === 'PLAY' && analysis.date > (db.getMeta('signalsThrough') || '')) {
+    let state = {}; try { state = JSON.parse(db.getMeta('playState') || '{}'); } catch { state = {}; }
+    if ((state[inst.id] || null) !== analysis.dir && !signals.some((x) => x.date === analysis.date)) signals.push({ date: analysis.date, dir: analysis.dir, grade: analysis.grade ?? null });
+  }
   chart.signals = signals;
   res.json({ instrument: inst, group, analysis, chart, tf, view, openBar, updatedAt: inst.last_fetch_at, hasH4: allH4.length > 0, positions });
 }));

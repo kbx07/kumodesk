@@ -169,6 +169,8 @@ export function openDb(file) {
   // every user has their own set of instruments: a per-user on/off choice over the shared catalogue
   addColumn('instruments', 'owner_id', 'INTEGER');
   addColumn('snapshots', 'user_id', 'INTEGER');
+  // chart arrows: every day on which the recommendation turned into "trade" (or changed direction)
+  db.exec('CREATE TABLE IF NOT EXISTS play_marks (instrument_id TEXT NOT NULL, date TEXT NOT NULL, dir TEXT NOT NULL, grade TEXT, PRIMARY KEY (instrument_id, date))');
   // when each funnel stage of an instrument last changed its status, per user
   db.exec(`CREATE TABLE IF NOT EXISTS stage_log (user_id INTEGER NOT NULL, instrument_id TEXT NOT NULL, stage TEXT NOT NULL,
     status TEXT NOT NULL, since TEXT NOT NULL, initial INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, instrument_id, stage))`);
@@ -372,6 +374,7 @@ export function deleteInstrument(id) {
   db.prepare('DELETE FROM positions WHERE instrument_id = ?').run(id);
   db.prepare('DELETE FROM user_instruments WHERE instrument_id = ?').run(id);
   db.prepare('DELETE FROM stage_log WHERE instrument_id = ?').run(id);
+  db.prepare('DELETE FROM play_marks WHERE instrument_id = ?').run(id);
   db.prepare('DELETE FROM instruments WHERE id = ?').run(id);
 }
 export function markFetch(id, error) {
@@ -704,14 +707,19 @@ export function recordStages(userId, instruments, ts = new Date().toISOString())
   const upd = db.prepare('UPDATE stage_log SET status = ?, since = ?, initial = 0 WHERE user_id = ? AND instrument_id = ? AND stage = ?');
   db.exec('BEGIN');
   try {
-    for (const a of instruments) for (const st of a.funnel || []) {
-      const prev = known.get(`${a.id}|${st.key}`);
-      if (prev === undefined) ins.run(userId, a.id, st.key, st.status, ts);
-      else if (prev !== st.status) upd.run(st.status, ts, userId, a.id, st.key);
+    for (const a of instruments) {
+      if (!a.funnel) continue;
+      // besides the stages: the overall outcome ("passed everything" or "stopped at stage X")
+      for (const st of [...a.funnel, { key: 'result', status: a.failedAt ? `STOP:${a.failedAt}` : 'REACHED' }]) {
+        const prev = known.get(`${a.id}|${st.key}`);
+        if (prev === undefined) ins.run(userId, a.id, st.key, st.status, ts);
+        else if (prev !== st.status) upd.run(st.status, ts, userId, a.id, st.key);
+      }
     }
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); throw e; }
 }
 export const stagesOf = (userId, id) => db.prepare('SELECT stage, status, since, initial FROM stage_log WHERE user_id = ? AND instrument_id = ?').all(userId, id);
-export const signalsOf = (id) => db.prepare('SELECT opened AS date, dir, grade FROM signals WHERE instrument_id = ? ORDER BY opened').all(id);
-export function resetSignals() { db.exec('DELETE FROM signals'); db.prepare("DELETE FROM meta WHERE key = 'signalsThrough'").run(); }
+export const addPlayMark = (id, date, dir, grade) => db.prepare('INSERT OR REPLACE INTO play_marks (instrument_id, date, dir, grade) VALUES (?,?,?,?)').run(id, date, dir, grade ?? null);
+export const playMarksOf = (id) => db.prepare('SELECT date, dir, grade FROM play_marks WHERE instrument_id = ? ORDER BY date').all(id);
+export function resetSignals() { db.exec('DELETE FROM signals'); db.exec('DELETE FROM play_marks'); db.prepare("DELETE FROM meta WHERE key IN ('signalsThrough', 'playState')").run(); }

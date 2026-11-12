@@ -50,6 +50,8 @@ export async function updateSignals({ days = 370, now = new Date() } = {}) {
   if (running) return { skipped: true };
   running = true;
   try {
+    // one-off: rebuild the history so the chart arrows (added later) cover the past year too
+    if (db.getMeta('marksVersion') !== '1') { db.resetSignals(); db.setMeta('marksVersion', '1'); }
     const instruments = db.listInstruments().filter((i) => i.enabled);
     const settings = db.getSettings();
     const groupsById = Object.fromEntries(db.listGroups().map((g) => [g.id, g]));
@@ -64,6 +66,9 @@ export async function updateSignals({ days = 370, now = new Date() } = {}) {
     for (const s of db.openSignals()) open[s.instrument_id] = s;
     const ptr = Object.fromEntries(instruments.map((i) => [i.id, 0]));
     let opened = 0, closed = 0;
+    // chart arrows: the direction of yesterday's "trade" recommendation per instrument (null = was not "trade")
+    let playState = {};
+    try { playState = JSON.parse(db.getMeta('playState') || '{}'); } catch { playState = {}; }
     for (const d of dates) {
       const slice = {}, barOf = {};
       for (const i of instruments) {
@@ -77,10 +82,14 @@ export async function updateSignals({ days = 370, now = new Date() } = {}) {
       for (const a of market.instruments) {
         const bar = barOf[a.id];
         if (!a.ok || !bar) continue; // no new candle that day (holiday, weekend)
+        const play = a.action === 'PLAY' ? a.dir : null;
+        if (play && play !== (playState[a.id] || null)) db.addPlayMark(a.id, d, a.dir, a.grade);
+        playState[a.id] = play;
         const step = stepSignal(open[a.id] || null, a, bar);
         if (step.close) { db.closeSignal(open[a.id].id, { closed: d, ...step.close }); delete open[a.id]; closed++; }
         if (step.open) { const id = db.openSignal({ instrument_id: a.id, opened: d, ...step.open }); open[a.id] = { id, instrument_id: a.id, opened: d, ...step.open }; opened++; }
       }
+      db.setMeta('playState', JSON.stringify(playState));
       db.setMeta('signalsThrough', d);
       await new Promise((r) => setImmediate(r)); // do not block the server while replaying a year
     }

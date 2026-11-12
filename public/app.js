@@ -127,8 +127,19 @@ function funnelCard(m) {
   if (funnelFilter) card.append(h('p', { class: 'hint' }, T('funnel.filtered', { stage: T('funnel.stage.' + funnelFilter) }), ' ', h('button', { class: 'chip', onclick: () => { funnelFilter = null; render(); } }, T('funnel.clear'))));
   return card;
 }
+/** The instrument name on its page: a list of the user's instruments to jump straight to another one. */
+function instPicker(inst, d) {
+  const list = (market?.instruments || []).slice().sort((x, y) => x.id.localeCompare(y.id));
+  if (!list.some((x) => x.id === inst.id)) list.unshift({ id: inst.id, name: inst.name, category: inst.category });
+  const cats = [...new Set(list.map((x) => x.category))];
+  return h('select', { class: 'instpick', 'aria-label': T('col.instrument'), onchange: (e) => { location.hash = `#/i/${encodeURIComponent(e.target.value)}?tf=${d.tf}&view=${d.view}`; } },
+    cats.map((c) => h('optgroup', { label: catName(c) }, list.filter((x) => x.category === c).map((x) => h('option', { value: x.id, selected: x.id === inst.id }, x.id === inst.id ? x.id : `${x.id} – ${instName(x)}`)))));
+}
 function funnelList(a) {
-  const card = h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h3', null, T('funnel.path'), h('span', { class: 'muted small' }, a.failedAt ? T('funnel.stoppedAt', { stage: T('funnel.stage.' + a.failedAt) }) : T('funnel.reached'))));
+  const rs = a.resultSince; // only on the instrument page
+  const when = !rs ? null : rs.candle ? T('funnel.sinceCandle', { date: rs.candle }) : T(rs.initial ? 'funnel.sinceInitial' : 'funnel.since', { ts: fmtTs(rs.ts) });
+  const card = h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h3', null, T('funnel.path'), h('span', { class: 'muted small', style: 'text-align:right' }, a.failedAt ? T('funnel.stoppedAt', { stage: T('funnel.stage.' + a.failedAt) }) : T('funnel.reached'),
+    when ? h('div', { class: 'fwhen' }, when) : null)));
   card.append(h('div', { class: 'fpath' }, a.funnel.map((st, i) => h('div', { class: `frow f-${st.status}` },
     h('span', { class: 'ficon', title: T('fstatus.' + st.status) }, F_ICON[st.status]),
     h('span', { class: 'fname' }, stageNo(i), ' ', T('funnel.stage.' + st.key)),
@@ -516,7 +527,7 @@ async function viewInstrument(id, tf, view) {
   root.replaceChildren();
   root.append(h('div', { class: 'detail-head' },
     h('a', { class: 'btn', href: '#/' }, '← ' + T('nav.dashboard')),
-    h('h1', null, inst.id), h('span', { class: 'muted' }, instName(inst)),
+    instPicker(inst, d), h('span', { class: 'muted' }, instName(inst)),
     a?.ok ? [dirBadge(a.dir), gradeBox(a.grade), h('span', { class: 'badge' }, T('action.' + a.action))] : null,
     a?.ok ? h('button', { class: 'btn primary', onclick: () => positionTicket(inst, a) }, '+ ' + T('ticket.open')) : null,
     h('span', { class: 'muted small' }, d.group ? T('detail.group', { name: d.group.name, time: d.group.close_time, tz: d.group.timezone }) : '')));
