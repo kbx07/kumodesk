@@ -588,3 +588,5 @@ body[data-accent] .auth { --accent: var(--acc); }
 .swatch input:checked + span { box-shadow: 0 0 0 2px var(--ink); }
 .swatch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 3px; }
 [hidden] { display: none !important; }
+.tablewrap.scrolly { max-height: 420px; overflow-y: auto; }
+.tablewrap.scrolly thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
