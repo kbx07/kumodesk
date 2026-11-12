@@ -51,7 +51,7 @@ export async function updateSignals({ days = 370, now = new Date() } = {}) {
   running = true;
   try {
     // one-off: rebuild the history so the chart arrows (added later) cover the past year too
-    if (db.getMeta('marksVersion') !== '1') { db.resetSignals(); db.setMeta('marksVersion', '1'); }
+    if (db.getMeta('marksVersion') !== '2') { db.resetSignals(); db.setMeta('marksVersion', '2'); }
     const instruments = db.listInstruments().filter((i) => i.enabled);
     const settings = db.getSettings();
     const groupsById = Object.fromEntries(db.listGroups().map((g) => [g.id, g]));
@@ -69,6 +69,8 @@ export async function updateSignals({ days = 370, now = new Date() } = {}) {
     // chart arrows: the direction of yesterday's "trade" recommendation per instrument (null = was not "trade")
     let playState = {};
     try { playState = JSON.parse(db.getMeta('playState') || '{}'); } catch { playState = {}; }
+    // funnel stages: the current result of every stage, to notice the candle on which it changes
+    const stageState = new Map(db.allStageHist().map((r) => [`${r.instrument_id}|${r.stage}`, r.status]));
     for (const d of dates) {
       const slice = {}, barOf = {};
       for (const i of instruments) {
@@ -85,6 +87,10 @@ export async function updateSignals({ days = 370, now = new Date() } = {}) {
         const play = a.action === 'PLAY' ? a.dir : null;
         if (play && play !== (playState[a.id] || null)) db.addPlayMark(a.id, d, a.dir, a.grade);
         playState[a.id] = play;
+        for (const st of a.funnel || []) {
+          const k = `${a.id}|${st.key}`;
+          if (stageState.get(k) !== st.status) { db.setStageHist(a.id, st.key, st.status, d); stageState.set(k, st.status); }
+        }
         const step = stepSignal(open[a.id] || null, a, bar);
         if (step.close) { db.closeSignal(open[a.id].id, { closed: d, ...step.close }); delete open[a.id]; closed++; }
         if (step.open) { const id = db.openSignal({ instrument_id: a.id, opened: d, ...step.open }); open[a.id] = { id, instrument_id: a.id, opened: d, ...step.open }; opened++; }

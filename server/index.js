@@ -536,7 +536,13 @@ app.get('/api/instrument/:id', wrap(async (req, res) => {
   let analysis = market.instruments.find((a) => a.id === inst.id) || null;
   if (analysis?.funnel) { // add when each stage last changed its status
     const log = Object.fromEntries(db.stagesOf(req.user.id, inst.id).map((r) => [r.stage, r]));
-    analysis = { ...analysis, funnel: analysis.funnel.map((st) => (log[st.key]?.status === st.status ? { ...st, since: log[st.key].since, sinceInitial: !!log[st.key].initial } : st)) };
+    const hist = Object.fromEntries(db.stageHistOf(inst.id).map((r) => [r.stage, r]));
+    analysis = { ...analysis, funnel: analysis.funnel.map((st) => {
+      const own = log[st.key]?.status === st.status ? log[st.key] : null;
+      if (own && !own.initial) return { ...st, since: own.since };                                   // seen changing by an analysis run: exact time
+      if (hist[st.key]?.status === st.status) return { ...st, sinceCandle: hist[st.key].since };      // from the replayed history: the candle
+      return own ? { ...st, since: own.since, sinceInitial: true } : st;
+    }) };
     // since when the overall outcome holds ("passed everything" / "stopped at stage X")
     const want = analysis.failedAt ? `STOP:${analysis.failedAt}` : 'REACHED';
     if (log.result?.status === want) analysis.resultSince = { ts: log.result.since, initial: !!log.result.initial };

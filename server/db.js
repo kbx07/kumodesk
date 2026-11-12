@@ -171,6 +171,8 @@ export function openDb(file) {
   addColumn('snapshots', 'user_id', 'INTEGER');
   // chart arrows: every day on which the recommendation turned into "trade" (or changed direction)
   db.exec('CREATE TABLE IF NOT EXISTS play_marks (instrument_id TEXT NOT NULL, date TEXT NOT NULL, dir TEXT NOT NULL, grade TEXT, PRIMARY KEY (instrument_id, date))');
+  // since which candle each funnel stage has its current result (from the day-by-day replay of the market, shared)
+  db.exec('CREATE TABLE IF NOT EXISTS stage_hist (instrument_id TEXT NOT NULL, stage TEXT NOT NULL, status TEXT NOT NULL, since TEXT NOT NULL, PRIMARY KEY (instrument_id, stage))');
   // when each funnel stage of an instrument last changed its status, per user
   db.exec(`CREATE TABLE IF NOT EXISTS stage_log (user_id INTEGER NOT NULL, instrument_id TEXT NOT NULL, stage TEXT NOT NULL,
     status TEXT NOT NULL, since TEXT NOT NULL, initial INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, instrument_id, stage))`);
@@ -375,6 +377,7 @@ export function deleteInstrument(id) {
   db.prepare('DELETE FROM user_instruments WHERE instrument_id = ?').run(id);
   db.prepare('DELETE FROM stage_log WHERE instrument_id = ?').run(id);
   db.prepare('DELETE FROM play_marks WHERE instrument_id = ?').run(id);
+  db.prepare('DELETE FROM stage_hist WHERE instrument_id = ?').run(id);
   db.prepare('DELETE FROM instruments WHERE id = ?').run(id);
 }
 export function markFetch(id, error) {
@@ -720,6 +723,10 @@ export function recordStages(userId, instruments, ts = new Date().toISOString())
   } catch (e) { db.exec('ROLLBACK'); throw e; }
 }
 export const stagesOf = (userId, id) => db.prepare('SELECT stage, status, since, initial FROM stage_log WHERE user_id = ? AND instrument_id = ?').all(userId, id);
+export const allStageHist = () => db.prepare('SELECT instrument_id, stage, status FROM stage_hist').all();
+export const setStageHist = (id, stage, status, since) => db.prepare(`INSERT INTO stage_hist (instrument_id, stage, status, since) VALUES (?,?,?,?)
+  ON CONFLICT(instrument_id, stage) DO UPDATE SET status = excluded.status, since = excluded.since`).run(id, stage, status, since);
+export const stageHistOf = (id) => db.prepare('SELECT stage, status, since FROM stage_hist WHERE instrument_id = ?').all(id);
 export const addPlayMark = (id, date, dir, grade) => db.prepare('INSERT OR REPLACE INTO play_marks (instrument_id, date, dir, grade) VALUES (?,?,?,?)').run(id, date, dir, grade ?? null);
 export const playMarksOf = (id) => db.prepare('SELECT date, dir, grade FROM play_marks WHERE instrument_id = ? ORDER BY date').all(id);
-export function resetSignals() { db.exec('DELETE FROM signals'); db.exec('DELETE FROM play_marks'); db.prepare("DELETE FROM meta WHERE key IN ('signalsThrough', 'playState')").run(); }
+export function resetSignals() { db.exec('DELETE FROM signals'); db.exec('DELETE FROM play_marks'); db.exec('DELETE FROM stage_hist'); db.prepare("DELETE FROM meta WHERE key IN ('signalsThrough', 'playState')").run(); }
