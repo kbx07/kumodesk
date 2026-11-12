@@ -541,12 +541,13 @@ async function viewInstrument(id, tf, view) {
       h('span', null, h('i', { style: 'background:var(--line-kijun)' }), 'Kijun-sen'),
       h('span', null, h('i', { style: 'background:var(--line-chikou)' }), 'Chikou Span'),
       h('span', null, h('i', { class: 'box', style: 'background:var(--cloud-up);outline:1px solid var(--up)' }), T('legend.cloudUp')),
-      h('span', null, h('i', { class: 'box', style: 'background:var(--cloud-down);outline:1px solid var(--down)' }), T('legend.cloudDown'))),
+      h('span', null, h('i', { class: 'box', style: 'background:var(--cloud-down);outline:1px solid var(--down)' }), T('legend.cloudDown')),
+      d.tf !== 'h4' ? h('span', null, h('b', { style: 'color:var(--up)' }, '▲'), h('b', { style: 'color:var(--down);margin-right:5px' }, '▼'), T('legend.signals')) : null),
     h('div', { class: 'chartbox' }, canvas, tip));
   root.append(chartCard);
   if (uiMode === 'pro') root.append(funnelList(a));
   if (d.positions.length) root.append(positionsCard(d.positions, false));
-  const redraw = () => drawIchimoku(canvas, tip, { ...d.chart, openBar: d.openBar }, { open: T('ohlc.o'), high: T('ohlc.h'), low: T('ohlc.l'), close: T('ohlc.c'), ahead: T('chart.ahead'), open_candle: T('chart.openCandle') });
+  const redraw = () => drawIchimoku(canvas, tip, { ...d.chart, openBar: d.openBar }, { open: T('ohlc.o'), high: T('ohlc.h'), low: T('ohlc.l'), close: T('ohlc.c'), ahead: T('chart.ahead'), open_candle: T('chart.openCandle'), signal: T('chart.signal'), LONG: T('dir.LONG'), SHORT: T('dir.SHORT') });
   requestAnimationFrame(redraw);
   window.onresize = () => { if (canvas.isConnected) redraw(); };
 

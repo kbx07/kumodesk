@@ -689,4 +689,5 @@ export const openSignals = () => db.prepare('SELECT * FROM signals WHERE closed 
 export const openSignal = (x) => Number(db.prepare('INSERT INTO signals (instrument_id, dir, grade, opened, entry, stop) VALUES (?,?,?,?,?,?)').run(x.instrument_id, x.dir, x.grade ?? null, x.opened, x.entry, x.stop).lastInsertRowid);
 export const closeSignal = (id, x) => db.prepare('UPDATE signals SET closed = ?, exit = ?, r = ?, reason = ? WHERE id = ?').run(x.closed, x.exit, x.r, x.reason, id);
 export const listSignals = (since) => db.prepare('SELECT * FROM signals WHERE opened >= ? ORDER BY COALESCE(closed, opened) DESC, id DESC').all(since);
+export const signalsOf = (id) => db.prepare('SELECT opened AS date, dir, grade FROM signals WHERE instrument_id = ? ORDER BY opened').all(id);
 export function resetSignals() { db.exec('DELETE FROM signals'); db.prepare("DELETE FROM meta WHERE key = 'signalsThrough'").run(); }

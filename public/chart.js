@@ -4,7 +4,7 @@ import { fmtPrice } from './i18n.js';
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 export function drawIchimoku(canvas, tip, data, labels, visible = 150) {
-  const { bars, tenkan, kijun, cloudA, cloudB, shift, openBar } = data;
+  const { bars, tenkan, kijun, cloudA, cloudB, shift, openBar, signals = [] } = data;
   const n = bars.length;
   const from = Math.max(0, n - visible);
   const slots = n - from + shift;
@@ -95,6 +95,19 @@ export function drawIchimoku(canvas, tip, data, labels, visible = 150) {
       } else ctx.fillRect(x(i) - bw / 2, top, bw, bh);
     }
     line(tenkan, C.tenkan, 2, n); line(kijun, C.kijun, 2, n);
+    // "play" signals: a small arrow on the entry candle (the one after the signal candle) –
+    // green pointing up under the candle for long, red pointing down above it for short
+    const idxByDate = new Map(bars.map((b, i) => [b.date, i]));
+    const aw = Math.max(5, Math.min(8, step * 0.7)), ah = aw * 1.5;
+    for (const sg of signals) {
+      const si = idxByDate.get(sg.date);
+      if (si == null || si + 1 < from) continue;
+      const b = bars[si + 1] || bars[si]; // the entry candle may not exist yet
+      const cx = x(si + 1), long = sg.dir === 'LONG';
+      const tipY = long ? Math.min(y(b.l) + 7, h - pad.b - ah - 1) : Math.max(y(b.h) - 7, pad.t + ah + 1);
+      ctx.fillStyle = long ? C.up : C.down; ctx.strokeStyle = C.surface; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(cx, tipY); ctx.lineTo(cx - aw, tipY + (long ? ah : -ah)); ctx.lineTo(cx + aw, tipY + (long ? ah : -ah)); ctx.closePath(); ctx.fill(); ctx.stroke();
+    }
     // Chikou: the close shifted back by `shift`
     ctx.strokeStyle = C.chikou; ctx.lineWidth = 1.5; ctx.beginPath();
     let st = false;
@@ -123,6 +136,8 @@ export function drawIchimoku(canvas, tip, data, labels, visible = 150) {
       rows.push(`<div><b>${b.date}</b>${openBar && i === n - 1 ? ` · ${labels.open_candle}` : ''}</div>`);
       row(labels.open, b.o); row(labels.high, b.h); row(labels.low, b.l); row(labels.close, b.c);
       row('Tenkan', tenkan[i], css('--line-tenkan')); row('Kijun', kijun[i], css('--line-kijun'));
+      const sg = i > 0 && signals.find((x) => x.date === bars[i - 1].date);
+      if (sg) rows.push(`<div class="r"><span>${labels.signal}</span><b style="color:${css(sg.dir === 'LONG' ? '--up' : '--down')}">${sg.dir === 'LONG' ? '▲' : '▼'} ${labels[sg.dir] || sg.dir}${sg.grade ? ' · ' + sg.grade : ''}</b></div>`);
     } else rows.push(`<div><b>+${i - n + 1} ${labels.ahead}</b></div>`);
     row('Senkou A', cloudA[i], css('--up')); row('Senkou B', cloudB[i], css('--down'));
     tip.innerHTML = rows.join(''); tip.hidden = false;

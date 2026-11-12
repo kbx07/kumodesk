@@ -558,6 +558,10 @@ app.get('/api/instrument/:id', wrap(async (req, res) => {
     cloudA: ich.cloudA.slice(from), cloudB: ich.cloudB.slice(from), // longer by `shift` (future cloud)
   };
   const positions = market.portfolio.positions.filter((p) => p.instrument_id === inst.id);
+  // "green lights" for the chart: the candle that gave the signal; the arrow is drawn on the next one (the entry day)
+  const signals = tf === 'h4' ? [] : db.signalsOf(inst.id);
+  if (tf !== 'h4' && analysis?.signal?.fresh && !signals.some((x) => x.date === analysis.signal.date)) signals.push({ date: analysis.signal.date, dir: analysis.signal.dir, grade: analysis.grade ?? null });
+  chart.signals = signals;
   res.json({ instrument: inst, group, analysis, chart, tf, view, openBar, updatedAt: inst.last_fetch_at, hasH4: allH4.length > 0, positions });
 }));
 
